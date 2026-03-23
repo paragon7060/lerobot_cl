@@ -43,9 +43,15 @@ logger = logging.getLogger(__name__)
 REPO_ID         = "paragon7060/my_task"               # HF 데이터셋 repo ID
 DATASET_ROOT    = "/home/bluepot/cl_ws/dataset/my_task"  # 로컬 데이터셋 경로
 NEG_PAIRS_PATH  = "/home/bluepot/cl_ws/negative_pairs.json"  # precompute 결과
-BASE_MODEL_PATH = "nvidia/GR00T-N1.5-3B"              # 사전학습 모델 (또는 로컬 경로)
+BASE_MODEL_PATH = "nvidia/GR00T-N1.5-3B"              # GR00TN15 아키텍처 로드용 (항상 필요)
 OUTPUT_DIR      = Path("outputs/groot_cl")             # 체크포인트 저장 위치
 DEVICE          = "cuda"
+
+# 데이터셋별로 사전학습된 GrootPolicy 체크포인트 경로.
+# None이면 BASE_MODEL_PATH(NVIDIA 원본)의 weights로 시작.
+# 설정 시 해당 checkpoint의 _groot_model.* weights를 로드하고
+# contrastive heads만 랜덤 초기화로 시작한다.
+GROOT_PRETRAINED_PATH = None  # 예: "/home/bluepot/cl_ws/outputs/groot_my_task/step_010000"
 
 # 학습 스텝 수
 PHASE1_STEPS  = 500
@@ -74,6 +80,7 @@ config = GrootCLConfig(
     contrastive_loss_weight=1.0,       # train_loop에서 phase별로 덮어씀
     contrastive_backprop_backbone=True,
     contrastive_fallback_to_in_batch=False,
+    groot_pretrained_path=GROOT_PRETRAINED_PATH,
     # GR00T 학습 대상
     tune_llm=False,
     tune_visual=False,

@@ -1,4 +1,8 @@
+import logging
+import os
+
 import torch
+from safetensors.torch import load_file as safetensors_load_file
 from torch import Tensor
 
 from lerobot.policies.groot_cl.action_head.contrastive_heads import (
@@ -11,6 +15,11 @@ from lerobot.policies.groot_cl.action_head.contrastive_heads import (
 from lerobot.policies.groot_cl.configuration_groot_cl import GrootCLConfig
 from lerobot.policies.groot_cl.groot_n1 import GR00TN15
 from lerobot.policies.groot_cl.modeling_groot import GrootPolicy
+
+logger = logging.getLogger(__name__)
+
+_GROOT_MODEL_PREFIX = "_groot_model."
+_SAFETENSORS_FILENAME = "model.safetensors"
 
 
 class GrootCLPolicy(GrootPolicy):
@@ -32,6 +41,57 @@ class GrootCLPolicy(GrootPolicy):
         self.action_contrastive_head = ActionContrastiveHead(contrastive_cfg)
 
         self.set_contrastive_phase(config.contrastive_phase)
+
+    def _create_groot_model(self):
+        """GR00TN15를 생성하고, groot_pretrained_path가 설정된 경우
+        NVIDIA 원본 weight 대신 사전학습된 GrootPolicy 체크포인트의
+        _groot_model.* weights를 로드한다.
+        """
+        self._handle_flash_attention_compatibility()
+
+        model = GR00TN15.from_pretrained(
+            pretrained_model_name_or_path=self.config.base_model_path,
+            tune_llm=self.config.tune_llm,
+            tune_visual=self.config.tune_visual,
+            tune_projector=self.config.tune_projector,
+            tune_diffusion_model=self.config.tune_diffusion_model,
+        )
+        model.compute_dtype = "bfloat16" if self.config.use_bf16 else model.compute_dtype
+        model.config.compute_dtype = model.compute_dtype
+
+        if self.config.groot_pretrained_path:
+            safetensors_path = os.path.join(self.config.groot_pretrained_path, _SAFETENSORS_FILENAME)
+            if not os.path.exists(safetensors_path):
+                raise FileNotFoundError(
+                    f"groot_pretrained_path가 설정되었으나 "
+                    f"{safetensors_path} 파일을 찾을 수 없습니다."
+                )
+
+            full_state = safetensors_load_file(safetensors_path)
+            groot_state = {
+                k[len(_GROOT_MODEL_PREFIX):]: v
+                for k, v in full_state.items()
+                if k.startswith(_GROOT_MODEL_PREFIX)
+            }
+
+            if not groot_state:
+                raise ValueError(
+                    f"{safetensors_path} 에서 '{_GROOT_MODEL_PREFIX}*' 키를 찾을 수 없습니다. "
+                    "GrootPolicy로 저장된 체크포인트인지 확인하세요."
+                )
+
+            missing, unexpected = model.load_state_dict(groot_state, strict=False)
+            if missing:
+                logger.warning("groot_pretrained_path 로드 후 missing keys: %s", missing)
+            if unexpected:
+                logger.warning("groot_pretrained_path 로드 후 unexpected keys: %s", unexpected)
+            logger.info(
+                "groot_pretrained_path '%s' 에서 _groot_model weights 로드 완료 (%d keys).",
+                self.config.groot_pretrained_path,
+                len(groot_state),
+            )
+
+        return model
 
     def set_contrastive_phase(self, phase: str) -> None:
         if phase == "phase1":
