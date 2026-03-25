@@ -202,16 +202,6 @@ class GR00TN15(PreTrainedModel):
     we expect these to have type BatchFeature, and they can of course have many other user specified keys too
     """
 
-    @classmethod
-    def get_init_context(cls, dtype, is_quantized, _is_ds_init_called, allow_all_kernels):
-        # transformers 5.x의 get_init_context()는 항상 torch.device("meta") 컨텍스트를
-        # 추가한다. 이 컨텍스트 안에서는 torch.as_tensor(scalar) 도 meta 텐서를 반환하는데,
-        # FlowmatchingActionHead.__init__이 Beta(alpha, beta)를 생성하면서 .item()을
-        # 호출해 RuntimeError가 발생한다.
-        # meta device 컨텍스트만 제거하여 CPU에서 정상 초기화되도록 한다.
-        contexts = super().get_init_context(dtype, is_quantized, _is_ds_init_called, allow_all_kernels)
-        return [c for c in contexts if not (isinstance(c, torch.device) and c.type == "meta")]
-
     def __init__(
         self,
         config: GR00TN15Config,
@@ -383,9 +373,37 @@ class GR00TN15(PreTrainedModel):
             )
             local_model_path = pretrained_model_name_or_path
 
-        pretrained_model = super().from_pretrained(
-            local_model_path, local_model_path=local_model_path, **kwargs
-        )
+        # transformers 5.x의 from_pretrained()은 meta device 컨텍스트를 항상 사용하는데,
+        # FlowmatchingActionHead.__init__의 Beta 분포 생성이 meta tensor 환경에서
+        # .item() 호출로 실패하고, meta context 제거 시엔 _finalize_model_loading의
+        # mark_tied_weights_as_initialized에서 all_tied_weights_keys 미설정 오류가 발생한다.
+        # 따라서 super().from_pretrained() 전체를 우회하고 수동 로딩으로 대체한다.
+
+        import glob
+        import os
+
+        from safetensors.torch import load_file as safetensors_load
+
+        # 1. config 로드
+        config = GR00TN15Config.from_pretrained(local_model_path)
+
+        # 2. 모델을 CPU에서 직접 초기화 (transformers 내부 machinery 우회)
+        pretrained_model = cls(config, local_model_path=local_model_path)
+
+        # 3. safetensors weights 로드 (단일 또는 샤딩된 파일 모두 처리)
+        safetensors_files = sorted(glob.glob(os.path.join(local_model_path, "*.safetensors")))
+        if not safetensors_files:
+            raise FileNotFoundError(f"No .safetensors files found in {local_model_path}")
+
+        state_dict = {}
+        for sf in safetensors_files:
+            state_dict.update(safetensors_load(sf, device="cpu"))
+
+        missing, unexpected = pretrained_model.load_state_dict(state_dict, strict=False)
+        if missing:
+            print(f"[GR00TN15] Missing keys ({len(missing)}): {missing[:3]}{'...' if len(missing) > 3 else ''}")
+        if unexpected:
+            print(f"[GR00TN15] Unexpected keys ({len(unexpected)}): {unexpected[:3]}{'...' if len(unexpected) > 3 else ''}")
 
         pretrained_model.backbone.set_trainable_parameters(tune_visual=tune_visual, tune_llm=tune_llm)
         pretrained_model.action_head.set_trainable_parameters(
