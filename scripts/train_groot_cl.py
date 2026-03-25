@@ -109,11 +109,17 @@ logger.info("Dataset: %d frames, %d episodes", dataset.num_frames, dataset.num_e
 
 
 def collate_fn(batch: list[dict]) -> dict:
-    """negative_action=None인 샘플을 zero tensor로 교체하고 collate."""
-    for item in batch:
-        if item.get("negative_action") is None:
-            item["negative_action"] = torch.zeros_like(item["action"])
-    return default_collate(batch)
+    """negative_action을 배치에서 분리해 collate한 뒤 다시 붙인다.
+    배치 내 하나라도 None이면 배치 전체를 None으로 처리한다.
+    → forward()에서 loss_cont = 0.0으로 안전하게 스킵된다.
+    """
+    neg_actions = [item.pop("negative_action", None) for item in batch]
+    result = default_collate(batch)
+    if all(isinstance(n, torch.Tensor) for n in neg_actions):
+        result["negative_action"] = torch.stack(neg_actions)
+    else:
+        result["negative_action"] = None
+    return result
 
 
 dataloader = DataLoader(
