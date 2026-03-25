@@ -373,8 +373,14 @@ class GR00TN15(PreTrainedModel):
             )
             local_model_path = pretrained_model_name_or_path
 
+        # low_cpu_mem_usage=False: HuggingFace의 기본값(True)은 init_empty_weights()로
+        # 모든 텐서를 meta device에 올린다. FlowmatchingActionHead.__init__에서
+        # Beta 분포 생성 시 .item()을 호출해 RuntimeError가 발생하므로 비활성화.
         pretrained_model = super().from_pretrained(
-            local_model_path, local_model_path=local_model_path, **kwargs
+            local_model_path,
+            local_model_path=local_model_path,
+            low_cpu_mem_usage=False,
+            **kwargs,
         )
 
         pretrained_model.backbone.set_trainable_parameters(tune_visual=tune_visual, tune_llm=tune_llm)
