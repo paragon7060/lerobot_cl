@@ -96,6 +96,12 @@ class GrootCLTrainConfig:
     contrastive_proj_hidden_dim: int = 512
     contrastive_triplet_margin: float = 0.5
 
+    # ── GR00T 아키텍처 ────────────────────────────────────────────────────────
+    # chunk_size와 n_action_steps는 반드시 같아야 함 (configuration_groot.py 검증).
+    # 데이터셋의 action horizon과 일치하도록 설정.
+    chunk_size: int = 50
+    n_action_steps: int = 50
+
     # ── GR00T 학습 대상 ───────────────────────────────────────────────────────
     tune_llm: bool = False
     tune_visual: bool = False
@@ -178,7 +184,8 @@ def main(cfg: GrootCLTrainConfig) -> None:
         tune_projector=cfg.tune_projector,
         tune_diffusion_model=cfg.tune_diffusion_model,
         use_bf16=True,
-        chunk_size=16,
+        chunk_size=cfg.chunk_size,
+        n_action_steps=cfg.n_action_steps,
         batch_size=cfg.batch_size,
     )
 
