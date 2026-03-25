@@ -346,31 +346,58 @@ class GR00TN15(PreTrainedModel):
         tune_llm = kwargs.pop("tune_llm", False)
         tune_projector = kwargs.pop("tune_projector", True)
         tune_diffusion_model = kwargs.pop("tune_diffusion_model", True)
+        lora_rank = kwargs.pop("lora_rank", 0)
+        lora_alpha = kwargs.pop("lora_alpha", 16)
+        lora_dropout = kwargs.pop("lora_dropout", 0.05)
 
         print(f"Loading pretrained dual brain from {pretrained_model_name_or_path}")
         print(f"Tune backbone vision tower: {tune_visual}")
         print(f"Tune backbone LLM: {tune_llm}")
         print(f"Tune action head projector: {tune_projector}")
         print(f"Tune action head DiT: {tune_diffusion_model}")
+        if lora_rank > 0:
+            print(f"LoRA enabled: rank={lora_rank}, alpha={lora_alpha}, dropout={lora_dropout}")
 
-        # get the current model path being downloaded
         try:
-            # NOTE(YL) This downloads the model to the local cache and returns the local path to the model
-            # saved in ~/.cache/huggingface/hub/
             local_model_path = snapshot_download(pretrained_model_name_or_path, repo_type="model")
-            # HFValidationError, RepositoryNotFoundError
         except (HFValidationError, RepositoryNotFoundError):
             print(
                 f"Model not found or avail in the huggingface hub. Loading from local path: {pretrained_model_name_or_path}"
             )
             local_model_path = pretrained_model_name_or_path
 
-        pretrained_model = super().from_pretrained(
-            local_model_path, local_model_path=local_model_path, **kwargs
-        )
+        import glob
+        import os
+
+        from safetensors.torch import load_file as safetensors_load
+
+        config = GR00TN15Config.from_pretrained(local_model_path)
+        pretrained_model = cls(config, local_model_path=local_model_path)
+
+        safetensors_files = sorted(glob.glob(os.path.join(local_model_path, "*.safetensors")))
+        if not safetensors_files:
+            raise FileNotFoundError(f"No .safetensors files found in {local_model_path}")
+
+        state_dict = {}
+        for sf in safetensors_files:
+            state_dict.update(safetensors_load(sf, device="cpu"))
+
+        missing, unexpected = pretrained_model.load_state_dict(state_dict, strict=False)
+        if missing:
+            print(f"[GR00TN15] Missing keys ({len(missing)}): {missing[:3]}{'...' if len(missing) > 3 else ''}")
+        if unexpected:
+            print(f"[GR00TN15] Unexpected keys ({len(unexpected)}): {unexpected[:3]}{'...' if len(unexpected) > 3 else ''}")
 
         pretrained_model.backbone.set_trainable_parameters(tune_visual=tune_visual, tune_llm=tune_llm)
         pretrained_model.action_head.set_trainable_parameters(
             tune_projector=tune_projector, tune_diffusion_model=tune_diffusion_model
         )
+
+        if lora_rank > 0:
+            pretrained_model.backbone.eagle_model.wrap_llm_lora(
+                r=lora_rank,
+                lora_alpha=lora_alpha,
+                lora_dropout=lora_dropout,
+            )
+
         return pretrained_model

@@ -73,13 +73,12 @@ class GrootCLTrainConfig:
     job_name: str = "groot_cl"
 
     # ── 학습 단계 ─────────────────────────────────────────────────────────────
-    phase1_steps: int = 500
-    phase2a_steps: int = 5000
+    phase1_steps: int = 2000
+    phase2a_steps: int = 15000
 
     # ── 최적화 ────────────────────────────────────────────────────────────────
     phase1_lr: float = 1e-4
     phase2a_lr: float = 2e-5
-    # Phase 2a에서 flow_matching_loss 스케일에 맞게 contrastive loss를 낮춰야 함
     phase2a_loss_weight: float = 0.05
 
     # ── DataLoader ────────────────────────────────────────────────────────────
@@ -108,6 +107,11 @@ class GrootCLTrainConfig:
     tune_visual: bool = False
     tune_projector: bool = True
     tune_diffusion_model: bool = True
+
+    # ── LoRA ──────────────────────────────────────────────────────────────────
+    lora_rank: int = 16
+    lora_alpha: int = 32
+    lora_dropout: float = 0.05
 
     # ── WandB ─────────────────────────────────────────────────────────────────
     wandb: WandBConfig = field(default_factory=WandBConfig)
@@ -162,6 +166,9 @@ def main(cfg: GrootCLTrainConfig) -> None:
                 "tune_visual": cfg.tune_visual,
                 "tune_projector": cfg.tune_projector,
                 "tune_diffusion_model": cfg.tune_diffusion_model,
+                "lora_rank": cfg.lora_rank,
+                "lora_alpha": cfg.lora_alpha,
+                "lora_dropout": cfg.lora_dropout,
                 "seed": cfg.seed,
             },
             save_code=False,
@@ -184,6 +191,9 @@ def main(cfg: GrootCLTrainConfig) -> None:
         tune_visual=cfg.tune_visual,
         tune_projector=cfg.tune_projector,
         tune_diffusion_model=cfg.tune_diffusion_model,
+        lora_rank=cfg.lora_rank,
+        lora_alpha=cfg.lora_alpha,
+        lora_dropout=cfg.lora_dropout,
         use_bf16=True,
         chunk_size=cfg.chunk_size,
         n_action_steps=cfg.n_action_steps,

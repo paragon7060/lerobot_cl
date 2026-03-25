@@ -354,43 +354,34 @@ class GR00TN15(PreTrainedModel):
         tune_llm = kwargs.pop("tune_llm", False)
         tune_projector = kwargs.pop("tune_projector", True)
         tune_diffusion_model = kwargs.pop("tune_diffusion_model", True)
+        lora_rank = kwargs.pop("lora_rank", 0)
+        lora_alpha = kwargs.pop("lora_alpha", 16)
+        lora_dropout = kwargs.pop("lora_dropout", 0.05)
 
         print(f"Loading pretrained dual brain from {pretrained_model_name_or_path}")
         print(f"Tune backbone vision tower: {tune_visual}")
         print(f"Tune backbone LLM: {tune_llm}")
         print(f"Tune action head projector: {tune_projector}")
         print(f"Tune action head DiT: {tune_diffusion_model}")
+        if lora_rank > 0:
+            print(f"LoRA enabled: rank={lora_rank}, alpha={lora_alpha}, dropout={lora_dropout}")
 
-        # get the current model path being downloaded
         try:
-            # NOTE(YL) This downloads the model to the local cache and returns the local path to the model
-            # saved in ~/.cache/huggingface/hub/
             local_model_path = snapshot_download(pretrained_model_name_or_path, repo_type="model")
-            # HFValidationError, RepositoryNotFoundError
         except (HFValidationError, RepositoryNotFoundError):
             print(
                 f"Model not found or avail in the huggingface hub. Loading from local path: {pretrained_model_name_or_path}"
             )
             local_model_path = pretrained_model_name_or_path
 
-        # transformers 5.x의 from_pretrained()은 meta device 컨텍스트를 항상 사용하는데,
-        # FlowmatchingActionHead.__init__의 Beta 분포 생성이 meta tensor 환경에서
-        # .item() 호출로 실패하고, meta context 제거 시엔 _finalize_model_loading의
-        # mark_tied_weights_as_initialized에서 all_tied_weights_keys 미설정 오류가 발생한다.
-        # 따라서 super().from_pretrained() 전체를 우회하고 수동 로딩으로 대체한다.
-
         import glob
         import os
 
         from safetensors.torch import load_file as safetensors_load
 
-        # 1. config 로드
         config = GR00TN15Config.from_pretrained(local_model_path)
-
-        # 2. 모델을 CPU에서 직접 초기화 (transformers 내부 machinery 우회)
         pretrained_model = cls(config, local_model_path=local_model_path)
 
-        # 3. safetensors weights 로드 (단일 또는 샤딩된 파일 모두 처리)
         safetensors_files = sorted(glob.glob(os.path.join(local_model_path, "*.safetensors")))
         if not safetensors_files:
             raise FileNotFoundError(f"No .safetensors files found in {local_model_path}")
@@ -409,4 +400,12 @@ class GR00TN15(PreTrainedModel):
         pretrained_model.action_head.set_trainable_parameters(
             tune_projector=tune_projector, tune_diffusion_model=tune_diffusion_model
         )
+
+        if lora_rank > 0:
+            pretrained_model.backbone.eagle_model.wrap_llm_lora(
+                r=lora_rank,
+                lora_alpha=lora_alpha,
+                lora_dropout=lora_dropout,
+            )
+
         return pretrained_model

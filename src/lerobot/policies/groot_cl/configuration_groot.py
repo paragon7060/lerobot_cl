@@ -34,7 +34,7 @@ class GrootConfig(PreTrainedConfig):
 
     # Dimension settings (must match pretrained GR00T model expectations)
     # Maximum state dimension. Shorter states will be zero-padded.
-    max_state_dim: int = 64
+    max_state_dim: int = 32
 
     # Maximum action dimension. Shorter actions will be zero-padded.
     max_action_dim: int = 32
