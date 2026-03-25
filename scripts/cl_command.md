@@ -25,10 +25,7 @@ pip install lerobot[groot]
 ```
 Step 0. 패키지 설치
 Step 1. Negative Pairs 사전 계산
-Step 2. 학습 스크립트 작성
-Step 3. Phase 1 실행 (헤드 warm-up)
-Step 4. Phase 2a 실행 (핵심 joint fine-tuning)
-Step 5. (선택) Phase 2b 실행
+Step 2. 학습 실행 (Phase 1 → Phase 2a 자동)
 ```
 
 ---
@@ -290,21 +287,35 @@ logger.info("학습 완료.")
 
 ---
 
-## Step 3–5. 실행
+## Step 2. 학습 실행
 
-### 단일 GPU (현재 환경 — RTX 4090 × 1)
+### 기본 실행 (단일 GPU)
 
 ```bash
 conda activate lerobot_050_groot
 cd /home/bluepot/cl_ws/lerobot_cl
 
-python scripts/train_groot_cl.py
+python scripts/train_groot_cl.py \
+    --repo_id=paragon7060/INSIGHTfixposV3 \
+    --root=/mntvol1/INSIGHTBench/data/paragon7060/INSIGHTfixposV3 \
+    --output_dir=./outputs/groot_cl \
+    --job_name=groot_cl_run1 \
+    --phase1_steps=500 \
+    --phase2a_steps=5000 \
+    --batch_size=4 \
+    --wandb.enable=true \
+    --wandb.project=groot_cl \
+    --wandb.entity=RwHlabs \
+    --wandb.disable_artifact=true
 ```
 
 ### 로그 파일 저장 포함
 
 ```bash
-python scripts/train_groot_cl.py 2>&1 | tee outputs/train_log.txt
+python scripts/train_groot_cl.py \
+    --repo_id=paragon7060/INSIGHTfixposV3 \
+    [기타 인자...] \
+    2>&1 | tee outputs/train_log.txt
 ```
 
 ### tmux 세션에서 실행 (서버 권장)
@@ -313,11 +324,69 @@ python scripts/train_groot_cl.py 2>&1 | tee outputs/train_log.txt
 tmux new-session -s groot_cl
 conda activate lerobot_050_groot
 cd /home/bluepot/cl_ws/lerobot_cl
-python scripts/train_groot_cl.py 2>&1 | tee outputs/train_log.txt
+
+python scripts/train_groot_cl.py \
+    --repo_id=paragon7060/INSIGHTfixposV3 \
+    --root=/mntvol1/INSIGHTBench/data/paragon7060/INSIGHTfixposV3 \
+    --output_dir=./outputs/groot_cl \
+    --job_name=groot_cl_run1 \
+    --wandb.enable=true \
+    --wandb.project=groot_cl \
+    --wandb.entity=RwHlabs \
+    2>&1 | tee outputs/train_log.txt
 
 # 세션 detach: Ctrl+B, D
 # 세션 복귀:   tmux attach -t groot_cl
 ```
+
+### 사전학습된 GrootPolicy 체크포인트에서 시작
+
+```bash
+python scripts/train_groot_cl.py \
+    --repo_id=paragon7060/INSIGHTfixposV3 \
+    --root=/mntvol1/INSIGHTBench/data/paragon7060/INSIGHTfixposV3 \
+    --groot_pretrained_path=/home/bluepot/cl_ws/outputs/groot_my_task/step_010000 \
+    --output_dir=./outputs/groot_cl_finetune \
+    --job_name=groot_cl_finetune \
+    --wandb.enable=true \
+    --wandb.project=groot_cl
+```
+
+---
+
+## CLI 인자 전체 목록
+
+| 인자 | 기본값 | 설명 |
+|------|--------|------|
+| `--repo_id` | `paragon7060/INSIGHTfixposV3` | HuggingFace 데이터셋 repo ID |
+| `--root` | `None` | 로컬 데이터셋 경로 (없으면 HF Hub) |
+| `--neg_pairs_path` | `/home/bluepot/cl_ws/negative_pairs.json` | precompute 결과 JSON |
+| `--base_model_path` | `nvidia/GR00T-N1.5-3B` | GR00T 기본 모델 경로 |
+| `--groot_pretrained_path` | `None` | 사전학습된 GrootPolicy 체크포인트 경로 |
+| `--output_dir` | `outputs/groot_cl` | 체크포인트 저장 위치 |
+| `--job_name` | `groot_cl` | WandB run 이름 및 식별자 |
+| `--phase1_steps` | `500` | Phase 1 학습 스텝 수 |
+| `--phase2a_steps` | `5000` | Phase 2a 학습 스텝 수 |
+| `--phase1_lr` | `1e-4` | Phase 1 learning rate |
+| `--phase2a_lr` | `2e-5` | Phase 2a learning rate |
+| `--phase2a_loss_weight` | `0.05` | Phase 2a contrastive loss 가중치 |
+| `--batch_size` | `4` | GPU당 배치 크기 |
+| `--num_workers` | `4` | DataLoader 워커 수 |
+| `--seed` | `42` | 랜덤 시드 |
+| `--log_interval` | `50` | 로그 출력 주기 (steps) |
+| `--save_interval` | `500` | 체크포인트 저장 주기 (steps) |
+| `--contrastive_latent_dim` | `256` | Contrastive latent 차원 |
+| `--contrastive_triplet_margin` | `0.5` | Triplet Loss margin |
+| `--tune_llm` | `false` | LLM backbone 학습 여부 |
+| `--tune_visual` | `false` | Visual encoder 학습 여부 |
+| `--tune_projector` | `true` | Projector 학습 여부 |
+| `--tune_diffusion_model` | `true` | Diffusion head 학습 여부 |
+| `--wandb.enable` | `false` | WandB 로깅 활성화 |
+| `--wandb.project` | `lerobot` | WandB 프로젝트 이름 |
+| `--wandb.entity` | `None` | WandB 팀/사용자 |
+| `--wandb.disable_artifact` | `false` | 체크포인트 artifact 업로드 비활성화 |
+| `--wandb.notes` | `None` | WandB run 메모 |
+| `--wandb.mode` | `None` | `online` / `offline` / `disabled` |
 
 ---
 
@@ -349,13 +418,16 @@ accelerate config
 accelerate launch \
     --num_processes 2 \
     --mixed_precision no \
-    scripts/train_groot_cl.py
-
-# GPU 4장
-accelerate launch \
-    --num_processes 4 \
-    --mixed_precision no \
-    scripts/train_groot_cl.py
+    scripts/train_groot_cl.py \
+    --repo_id=paragon7060/INSIGHTfixposV3 \
+    --root=/mntvol1/INSIGHTBench/data/paragon7060/INSIGHTfixposV3 \
+    --output_dir=./outputs/groot_cl_multi \
+    --job_name=groot_cl_multi \
+    --batch_size=4 \
+    --wandb.enable=true \
+    --wandb.project=groot_cl \
+    --wandb.entity=RwHlabs \
+    --wandb.disable_artifact=true
 ```
 
 ### tmux + accelerate (서버 권장)
@@ -365,7 +437,15 @@ tmux new-session -s groot_cl_multi
 conda activate lerobot_050_groot
 cd /home/bluepot/cl_ws/lerobot_cl
 
-accelerate launch --num_processes 2 scripts/train_groot_cl.py \
+accelerate launch --num_processes 2 \
+    scripts/train_groot_cl.py \
+    --repo_id=paragon7060/INSIGHTfixposV3 \
+    --root=/mntvol1/INSIGHTBench/data/paragon7060/INSIGHTfixposV3 \
+    --output_dir=./outputs/groot_cl_multi \
+    --job_name=groot_cl_multi \
+    --wandb.enable=true \
+    --wandb.project=groot_cl \
+    --wandb.entity=RwHlabs \
     2>&1 | tee outputs/train_log_multigpu.txt
 ```
 
@@ -374,7 +454,10 @@ accelerate launch --num_processes 2 scripts/train_groot_cl.py \
 ```bash
 CUDA_VISIBLE_DEVICES=0,1 accelerate launch \
     --num_processes 2 \
-    scripts/train_groot_cl.py
+    scripts/train_groot_cl.py \
+    --repo_id=paragon7060/INSIGHTfixposV3 \
+    --wandb.enable=true \
+    --wandb.project=groot_cl
 ```
 
 ### Multi-GPU 동작 원리
