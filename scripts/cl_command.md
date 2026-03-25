@@ -7,6 +7,17 @@
 - GPU: CUDA 지원 필수 (bf16 학습 권장)
 - 데이터셋: LeRobot 포맷 (v3.0) 로컬 또는 HuggingFace Hub
 
+## setting lerobot050_groot
+conda create -y -n lerobot_050_groot python=3.12
+conda install ffmpeg=7.1.1 -c conda-forge
+conda install -c nvidia cuda-toolkit=12.1 -y
+pip install psutil
+pip install "torch>=2.2.1,<2.8.0" "torchvision>=0.21.0,<0.23.0" # --index-url https://download.pytorch.org/whl/cu1XX
+pip install ninja "packaging>=24.2,<26.0" # flash attention dependencies
+pip install "flash-attn>=2.5.9,<3.0.0" --no-build-isolation
+python -c "import flash_attn; print(f'Flash Attention {flash_attn.__version__} imported successfully')"
+pip install lerobot[groot]
+
 ---
 
 ## 전체 흐름
@@ -281,7 +292,7 @@ logger.info("학습 완료.")
 
 ## Step 3–5. 실행
 
-### Phase 1 + Phase 2a 한 번에 실행
+### 단일 GPU (현재 환경 — RTX 4090 × 1)
 
 ```bash
 conda activate lerobot_050_groot
@@ -296,14 +307,7 @@ python scripts/train_groot_cl.py
 python scripts/train_groot_cl.py 2>&1 | tee outputs/train_log.txt
 ```
 
-### 백그라운드 실행 (서버)
-
-```bash
-nohup python scripts/train_groot_cl.py > outputs/train_log.txt 2>&1 &
-echo "PID: $!"
-```
-
-### tmux 세션에서 실행 (권장)
+### tmux 세션에서 실행 (서버 권장)
 
 ```bash
 tmux new-session -s groot_cl
@@ -314,6 +318,78 @@ python scripts/train_groot_cl.py 2>&1 | tee outputs/train_log.txt
 # 세션 detach: Ctrl+B, D
 # 세션 복귀:   tmux attach -t groot_cl
 ```
+
+---
+
+## Multi-GPU 실행 (accelerate)
+
+### 최초 1회: accelerate 설정
+
+```bash
+conda activate lerobot_050_groot
+accelerate config
+```
+
+대화형 프롬프트에서 아래처럼 선택:
+```
+- This machine / multi-GPU
+- How many GPUs: 2  (또는 서버의 실제 GPU 수)
+- Do you want to use DeepSpeed? No
+- Do you want to use FullyShardedDataParallel? No
+- What GPU ids: 0,1  (사용할 GPU 번호)
+- mixed precision: no  (스크립트 내부에서 bf16 처리)
+```
+
+설정 파일은 `~/.cache/huggingface/accelerate/default_config.yaml`에 저장됨.
+
+### config 파일 없이 명령줄로 직접 실행
+
+```bash
+# GPU 2장
+accelerate launch \
+    --num_processes 2 \
+    --mixed_precision no \
+    scripts/train_groot_cl.py
+
+# GPU 4장
+accelerate launch \
+    --num_processes 4 \
+    --mixed_precision no \
+    scripts/train_groot_cl.py
+```
+
+### tmux + accelerate (서버 권장)
+
+```bash
+tmux new-session -s groot_cl_multi
+conda activate lerobot_050_groot
+cd /home/bluepot/cl_ws/lerobot_cl
+
+accelerate launch --num_processes 2 scripts/train_groot_cl.py \
+    2>&1 | tee outputs/train_log_multigpu.txt
+```
+
+### 특정 GPU 지정 실행
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 accelerate launch \
+    --num_processes 2 \
+    scripts/train_groot_cl.py
+```
+
+### Multi-GPU 동작 원리
+
+| 항목 | 동작 |
+|------|------|
+| 모델 | DDP로 각 GPU에 복제, gradient all-reduce |
+| DataLoader | DistributedSampler 자동 삽입 (accelerator.prepare 시) |
+| Batch size | `BATCH_SIZE`는 **per-GPU** 크기. 총 effective batch = `BATCH_SIZE × num_processes` |
+| Checkpoint | main process(rank 0)에서만 저장 (`accelerator.is_main_process`) |
+| Loss | 각 GPU에서 forward/backward 후 gradient 동기화 (DDP 표준) |
+| Triplet Loss | GPU 간 negative 공유 없이도 동작 (명시적 hard negative 사용) |
+
+> **Batch size 주의**: GPU 4장에서 `BATCH_SIZE=4`이면 실제 effective batch = 16.
+> Triplet Loss는 배치 크기에 민감하지 않으나 (hard negative 고정), flow matching은 클수록 안정적.
 
 ---
 

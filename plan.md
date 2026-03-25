@@ -659,3 +659,33 @@ Parquet action 컬럼 읽기는 빠르지만 video 디코딩이 포함될 경우
 - [ ] action 컬럼 전용 mmap 캐시로 negative 로드 비용 절감
 - [ ] Phase1 수렴 판단 자동화 (contrastive_loss plateau 감지)
 - [ ] eval 지표: vlm_z ↔ pos_action_z cosine similarity vs vlm_z ↔ neg_action_z cosine similarity
+
+---
+
+## 7. Multi-GPU Accelerate 지원 — TODO
+
+### 변경 파일
+- [x] `scripts/train_groot_cl.py` — accelerate 통합 ✅
+- [x] `scripts/cl_command.md` — multi-GPU 실행 방법 추가 ✅
+
+### 구현 세부사항
+
+#### prepare() 분리 전략
+- `policy`, `dataloader` → 모듈 레벨에서 1회 `accelerator.prepare()`
+- `optimizer`, `scheduler` → `train_loop` 내 phase마다 `accelerator.prepare()`
+- 이유: DDP wrap은 1회만, optimizer는 phase마다 trainable params가 달라짐
+
+#### 핵심 변경점
+| 기존 | accelerate 버전 |
+|------|----------------|
+| `policy.to("cuda")` | `accelerator.prepare(policy)` |
+| `DEVICE = "cuda"` | `DEVICE = accelerator.device` |
+| `loss.backward()` | `accelerator.backward(loss)` |
+| `clip_grad_norm_(policy.parameters(), ...)` | `accelerator.clip_grad_norm_(policy.parameters(), ...)` |
+| `policy.set_contrastive_phase()` | `accelerator.unwrap_model(policy).set_contrastive_phase()` |
+| `policy.save_pretrained()` | `accelerator.unwrap_model(policy).save_pretrained()` (main process만) |
+
+#### mixed_precision 처리
+- `modeling_groot_cl.py:forward()` 내부에 `torch.autocast(dtype=bfloat16)` 이미 존재
+- accelerate `mixed_precision="no"` 설정 → autocast 중복 방지
+- bf16 처리는 모델 내부에서만 담당
