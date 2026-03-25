@@ -46,7 +46,6 @@ def build_negative_pairs(dataset: LeRobotDataset, task_mapping: dict) -> dict:
         task_by_episode[ep_idx] = task_idx
         task_to_episodes[task_idx].append(ep_idx)
 
-    # 3. JSON에서 읽어온 문자열 매핑('3a')을 내부 정수 인덱스로 변환
     neg_task_map = {}
     for task_str, neg_task_strs in task_mapping.items():
         if task_str not in task_name_to_idx:
@@ -66,7 +65,9 @@ def build_negative_pairs(dataset: LeRobotDataset, task_mapping: dict) -> dict:
     pairs: dict[str, dict] = {}
 
     # 4. 지정된 매핑에 따라 Hard Negative 매칭
-    for ep_idx, ep_meta in episodes_meta.items():
+    # episodes_meta는 HuggingFace datasets.Dataset — .items() 없음, 정수 인덱싱 사용
+    for ep_idx in range(dataset.meta.total_episodes):
+        ep_meta = episodes_meta[ep_idx]
         task_idx = task_by_episode[ep_idx]
         ep_len = int(ep_meta["dataset_to_index"]) - int(ep_meta["dataset_from_index"])
 
