@@ -60,6 +60,7 @@ class GrootCLTrainConfig:
     repo_id: str = "paragon7060/INSIGHTfixposV3"
     root: str | None = None
     neg_pairs_path: str = "/home/bluepot/cl_ws/negative_pairs.json"
+    video_backend: str = "pyav"
 
     # ── 모델 ─────────────────────────────────────────────────────────────────
     base_model_path: str = "nvidia/GR00T-N1.5-3B"
@@ -198,6 +199,7 @@ def main(cfg: GrootCLTrainConfig) -> None:
         root=cfg.root,
         negative_pairs_path=cfg.neg_pairs_path,
         delta_timestamps=delta_timestamps,
+        video_backend=cfg.video_backend,
     )
 
     if accelerator.is_main_process:
