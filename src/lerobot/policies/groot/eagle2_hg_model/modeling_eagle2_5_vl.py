@@ -236,6 +236,7 @@ class Eagle25VLForConditionalGeneration(Eagle25VLPreTrainedModel, GenerationMixi
         input_ids = input_ids.reshape(b * n)
         selected = input_ids == self.image_token_index
         try:
+            input_embeds = input_embeds.clone()
             input_embeds[selected] = input_embeds[selected] * 0.0 + vit_embeds.reshape(-1, c)
         except Exception as e:
             vit_embeds = vit_embeds.reshape(-1, c)
@@ -351,6 +352,7 @@ class Eagle25VLForConditionalGeneration(Eagle25VLPreTrainedModel, GenerationMixi
             input_ids = input_ids.reshape(b * n)
             selected = input_ids == self.config.image_token_index
             assert selected.sum() != 0
+            input_embeds = input_embeds.clone()
             input_embeds[selected] = vit_embeds.reshape(-1, c).to(input_embeds.device)
 
             input_embeds = input_embeds.reshape(b, n, c)
