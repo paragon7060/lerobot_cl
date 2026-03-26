@@ -92,12 +92,4 @@ def make_groot_cl_pre_post_processors(
     PolicyProcessorPipeline[PolicyAction, PolicyAction],
 ]:
     pre, post = make_groot_pre_post_processors(config, dataset_stats)
-
-    pre.steps.append(
-        NegativeActionNormalizeStep(
-            stats=dataset_stats or {},
-            normalize_min_max=True,
-        )
-    )
-
     return pre, post

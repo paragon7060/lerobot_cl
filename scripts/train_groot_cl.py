@@ -1,15 +1,19 @@
 #!/usr/bin/env python
-"""GR00T Contrastive Learning 학습 스크립트 (accelerate + draccus CLI + wandb 지원).
+"""GR00T Contrastive Learning 학습 스크립트 (accelerate + lerobot parser CLI + wandb 지원).
+
+Phase 1: contrastive heads warm-up (_groot_model frozen)
+Phase 2a: joint fine-tuning (LoRA + projector + diffusion + contrastive heads, warmup scheduler)
 
 단일 GPU 실행:
   python scripts/train_groot_cl.py \
-      --repo_id=paragon7060/INSIGHTfixposV3 \
-      --root=/mntvol1/INSIGHTBench/data/paragon7060/INSIGHTfixposV3 \
+      --dataset.repo_id=paragon7060/INSIGHTfixposV3 \
+      --dataset.root=/mntvol1/INSIGHTBench/data/paragon7060/INSIGHTfixposV3 \
+      --dataset.video_backend=pyav \
       --output_dir=./outputs/groot_cl \
       --job_name=groot_cl_run1 \
       --phase1_steps=500 \
       --phase2a_steps=5000 \
-      --batch_size=4 \
+      --policy.lora_target=vision \
       --wandb.enable=true \
       --wandb.project=groot_cl \
       --wandb.entity=RwHlabs \
@@ -18,8 +22,8 @@
 Multi-GPU 실행:
   accelerate launch --num_processes 2 scripts/train_groot_cl.py [same args]
 
-주의: negative_action은 batch_to_transition()을 통과하면 사라지므로
-      전처리 파이프라인(pre) 밖에서 NegativeActionNormalizeStep을 직접 호출한다.
+주의: negative_action은 preprocess() 내에서 NegativeActionNormalizeStep을 직접 호출하여
+      수동으로 정규화한다. pipeline(pre)은 make_groot_pre_post_processors에서 생성한다.
 """
 
 import logging
@@ -27,21 +31,30 @@ import random
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import draccus
 import torch
 import wandb
 from accelerate import Accelerator
+from accelerate.utils import DistributedDataParallelKwargs
 from torch.utils.data import DataLoader
 from torch.utils.data.dataloader import default_collate
+from transformers import get_cosine_schedule_with_warmup
 
-from lerobot.configs.default import WandBConfig
+from lerobot.configs import parser
+from lerobot.configs.default import DatasetConfig
+from lerobot.configs.train import TrainPipelineConfig
 from lerobot.datasets.contrastive_dataset import ContrastiveLeRobotDataset
 from lerobot.datasets.dataset_metadata import LeRobotDatasetMetadata
 from lerobot.datasets.factory import resolve_delta_timestamps
-from lerobot.policies.factory import make_policy, make_pre_post_processors
+from lerobot.policies.factory import make_policy
 from lerobot.policies.groot_cl.configuration_groot_cl import GrootCLConfig
 from lerobot.policies.groot_cl.modeling_groot_cl import GrootCLPolicy
+from lerobot.policies.groot_cl.processor_groot import make_groot_pre_post_processors
 from lerobot.policies.groot_cl.processor_groot_cl import NegativeActionNormalizeStep
+from lerobot.utils.train_utils import (
+    get_step_checkpoint_dir,
+    save_checkpoint,
+    update_last_checkpoint,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,94 +63,64 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 설정 dataclass — draccus가 CLI 인자로 파싱
-# ─────────────────────────────────────────────────────────────────────────────
-
 @dataclass
-class GrootCLTrainConfig:
-    # ── 데이터셋 ──────────────────────────────────────────────────────────────
-    repo_id: str = "paragon7060/INSIGHTfixposV3"
-    root: str | None = None
-    neg_pairs_path: str = "/home/bluepot/cl_ws/negative_pairs.json"
-    video_backend: str = "pyav"
+class GrootCLTrainConfig(TrainPipelineConfig):
+    dataset: DatasetConfig = field(
+        default_factory=lambda: DatasetConfig(
+            repo_id="paragon7060/INSIGHTfixposV3",
+            root=None,
+            video_backend="pyav",
+        )
+    )
+    policy: GrootCLConfig = field(default_factory=GrootCLConfig)
 
-    # ── 모델 ─────────────────────────────────────────────────────────────────
-    base_model_path: str = "nvidia/GR00T-N1.5-3B"
-    # 데이터셋별 사전학습된 GrootPolicy 체크포인트 경로.
-    # 설정 시 _groot_model.* weights를 로드하고 contrastive heads는 랜덤 초기화.
-    groot_pretrained_path: str | None = None
-
-    # ── 출력 / 이름 ───────────────────────────────────────────────────────────
-    output_dir: Path = Path("outputs/groot_cl")
-    job_name: str = "groot_cl"
-
-    # ── 학습 단계 ─────────────────────────────────────────────────────────────
-    phase1_steps: int = 2000
-    phase2a_steps: int = 15000
-
-    # ── 최적화 ────────────────────────────────────────────────────────────────
-    phase1_lr: float = 1e-4
-    phase2a_lr: float = 2e-5
-    phase2a_loss_weight: float = 0.05
-
-    # ── DataLoader ────────────────────────────────────────────────────────────
+    steps: int = 17_000
     batch_size: int = 4
     num_workers: int = 4
+    log_freq: int = 50
+    save_freq: int = 500
     seed: int = 42
+    use_policy_training_preset: bool = False
 
-    # ── 로깅 / 저장 ───────────────────────────────────────────────────────────
-    log_interval: int = 50
-    save_interval: int = 500
+    neg_pairs_path: str = "/home/bluepot/cl_ws/negative_pairs.json"
+    phase1_steps: int = 2_000
+    phase2a_steps: int = 15_000
+    phase1_lr: float = 1e-4
+    phase2a_lr: float = 2e-5
+    phase2a_warmup_steps: int = 500
+    phase2a_loss_weight: float = 0.05
 
-    # ── Contrastive 하이퍼파라미터 ────────────────────────────────────────────
-    contrastive_latent_dim: int = 256
-    contrastive_cnn_hidden_dim: int = 128
-    contrastive_proj_hidden_dim: int = 512
-    contrastive_triplet_margin: float = 0.5
-
-    # ── GR00T 아키텍처 ────────────────────────────────────────────────────────
-    # chunk_size와 n_action_steps는 반드시 같아야 함 (configuration_groot.py 검증).
-    # 데이터셋의 action horizon과 일치하도록 설정.
-    chunk_size: int = 50
-    n_action_steps: int = 50
-
-    # ── GR00T 학습 대상 ───────────────────────────────────────────────────────
-    tune_llm: bool = False
-    tune_visual: bool = False
-    tune_projector: bool = True
-    tune_diffusion_model: bool = True
-
-    # ── LoRA ──────────────────────────────────────────────────────────────────
-    lora_rank: int = 16
-    lora_alpha: int = 32
-    lora_dropout: float = 0.05
-
-    # ── WandB ─────────────────────────────────────────────────────────────────
-    wandb: WandBConfig = field(default_factory=WandBConfig)
+    def validate(self) -> None:
+        if self.policy is None:
+            raise ValueError("policy must be set")
+        if not self.job_name:
+            self.job_name = "groot_cl"
+        if not self.output_dir:
+            self.output_dir = Path("outputs/groot_cl")
+        self.steps = self.phase1_steps + self.phase2a_steps
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 메인
-# ─────────────────────────────────────────────────────────────────────────────
-
-@draccus.wrap()
+@parser.wrap()
 def main(cfg: GrootCLTrainConfig) -> None:
-    # ── Accelerator ───────────────────────────────────────────────────────────
-    # mixed_precision="no": modeling_groot_cl.py forward()에 torch.autocast(bf16)가
-    # 이미 존재하므로 accelerate 측 autocast와 중복 적용을 막는다.
-    accelerator = Accelerator(mixed_precision="no")
+    ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
+    accelerator = Accelerator(
+        mixed_precision="no",
+        step_scheduler_with_optimizer=False,
+        kwargs_handlers=[ddp_kwargs],
+    )
     device = accelerator.device
 
     random.seed(cfg.seed)
     torch.manual_seed(cfg.seed)
+
+    torch.backends.cudnn.benchmark = True
+    torch.backends.cuda.matmul.allow_tf32 = True
 
     if accelerator.is_main_process:
         cfg.output_dir.mkdir(parents=True, exist_ok=True)
         logger.info("Output dir: %s", cfg.output_dir)
         logger.info("Accelerator: num_processes=%d, device=%s", accelerator.num_processes, device)
 
-    # ── WandB 초기화 (main process 전용) ─────────────────────────────────────
     use_wandb = cfg.wandb.enable and accelerator.is_main_process
     if use_wandb:
         wandb.init(
@@ -149,76 +132,61 @@ def main(cfg: GrootCLTrainConfig) -> None:
             mode=cfg.wandb.mode,
             dir=str(cfg.output_dir),
             config={
-                "repo_id": cfg.repo_id,
-                "base_model_path": cfg.base_model_path,
-                "groot_pretrained_path": cfg.groot_pretrained_path,
+                "repo_id": cfg.dataset.repo_id,
+                "base_model_path": cfg.policy.base_model_path,
+                "groot_pretrained_path": cfg.policy.groot_pretrained_path,
                 "phase1_steps": cfg.phase1_steps,
                 "phase2a_steps": cfg.phase2a_steps,
+                "phase2a_warmup_steps": cfg.phase2a_warmup_steps,
                 "phase1_lr": cfg.phase1_lr,
                 "phase2a_lr": cfg.phase2a_lr,
                 "phase2a_loss_weight": cfg.phase2a_loss_weight,
                 "batch_size": cfg.batch_size,
                 "num_processes": accelerator.num_processes,
                 "effective_batch_size": cfg.batch_size * accelerator.num_processes,
-                "contrastive_latent_dim": cfg.contrastive_latent_dim,
-                "contrastive_triplet_margin": cfg.contrastive_triplet_margin,
-                "tune_llm": cfg.tune_llm,
-                "tune_visual": cfg.tune_visual,
-                "tune_projector": cfg.tune_projector,
-                "tune_diffusion_model": cfg.tune_diffusion_model,
-                "lora_rank": cfg.lora_rank,
-                "lora_alpha": cfg.lora_alpha,
-                "lora_dropout": cfg.lora_dropout,
+                "contrastive_latent_dim": cfg.policy.contrastive_latent_dim,
+                "contrastive_triplet_margin": cfg.policy.contrastive_triplet_margin,
+                "tune_llm": cfg.policy.tune_llm,
+                "tune_visual": cfg.policy.tune_visual,
+                "tune_projector": cfg.policy.tune_projector,
+                "tune_diffusion_model": cfg.policy.tune_diffusion_model,
+                "lora_rank": cfg.policy.lora_rank,
+                "lora_alpha": cfg.policy.lora_alpha,
+                "lora_dropout": cfg.policy.lora_dropout,
+                "lora_target": cfg.policy.lora_target,
                 "seed": cfg.seed,
             },
             save_code=False,
         )
         logger.info("WandB initialized: project=%s, run=%s", cfg.wandb.project, wandb.run.name)
 
-    # ── GrootCLConfig ─────────────────────────────────────────────────────────
-    policy_config = GrootCLConfig(
-        base_model_path=cfg.base_model_path,
-        contrastive_phase="phase1",
-        contrastive_latent_dim=cfg.contrastive_latent_dim,
-        contrastive_cnn_hidden_dim=cfg.contrastive_cnn_hidden_dim,
-        contrastive_proj_hidden_dim=cfg.contrastive_proj_hidden_dim,
-        contrastive_triplet_margin=cfg.contrastive_triplet_margin,
-        contrastive_loss_weight=1.0,
-        contrastive_backprop_backbone=True,
-        contrastive_fallback_to_in_batch=False,
-        groot_pretrained_path=cfg.groot_pretrained_path,
-        tune_llm=cfg.tune_llm,
-        tune_visual=cfg.tune_visual,
-        tune_projector=cfg.tune_projector,
-        tune_diffusion_model=cfg.tune_diffusion_model,
-        lora_rank=cfg.lora_rank,
-        lora_alpha=cfg.lora_alpha,
-        lora_dropout=cfg.lora_dropout,
-        use_bf16=True,
-        chunk_size=cfg.chunk_size,
-        n_action_steps=cfg.n_action_steps,
-        batch_size=cfg.batch_size,
-    )
+    cfg.policy.contrastive_phase = "phase1"
 
-    # ── 데이터셋 ──────────────────────────────────────────────────────────────
-    ds_meta = LeRobotDatasetMetadata(repo_id=cfg.repo_id, root=cfg.root)
-    delta_timestamps = resolve_delta_timestamps(policy_config, ds_meta)
+    ds_meta = LeRobotDatasetMetadata(repo_id=cfg.dataset.repo_id, root=cfg.dataset.root)
+    delta_timestamps = resolve_delta_timestamps(cfg.policy, ds_meta)
 
-    dataset = ContrastiveLeRobotDataset(
-        repo_id=cfg.repo_id,
-        root=cfg.root,
-        negative_pairs_path=cfg.neg_pairs_path,
-        delta_timestamps=delta_timestamps,
-        video_backend=cfg.video_backend,
-    )
+    if accelerator.is_main_process:
+        dataset = ContrastiveLeRobotDataset(
+            repo_id=cfg.dataset.repo_id,
+            root=cfg.dataset.root,
+            negative_pairs_path=cfg.neg_pairs_path,
+            delta_timestamps=delta_timestamps,
+            video_backend=cfg.dataset.video_backend,
+        )
+    accelerator.wait_for_everyone()
+    if not accelerator.is_main_process:
+        dataset = ContrastiveLeRobotDataset(
+            repo_id=cfg.dataset.repo_id,
+            root=cfg.dataset.root,
+            negative_pairs_path=cfg.neg_pairs_path,
+            delta_timestamps=delta_timestamps,
+            video_backend=cfg.dataset.video_backend,
+        )
 
     if accelerator.is_main_process:
         logger.info("Dataset: %d frames, %d episodes", dataset.num_frames, dataset.num_episodes)
 
     def collate_fn(batch: list[dict]) -> dict:
-        """negative_action=None 샘플이 있으면 배치 전체를 None으로 처리.
-        → forward()에서 loss_cont = 0.0으로 안전하게 스킵된다.
-        """
         neg_actions = [item.pop("negative_action", None) for item in batch]
         result = default_collate(batch)
         if all(isinstance(n, torch.Tensor) for n in neg_actions):
@@ -235,47 +203,57 @@ def main(cfg: GrootCLTrainConfig) -> None:
         pin_memory=True,
         drop_last=True,
         collate_fn=collate_fn,
+        prefetch_factor=2 if cfg.num_workers > 0 else None,
     )
 
-    # ── 전처리 파이프라인 ──────────────────────────────────────────────────────
-    pre, _ = make_pre_post_processors(policy_config, dataset_stats=ds_meta.stats)
+    pre, _ = make_groot_pre_post_processors(cfg.policy, dataset_stats=ds_meta.stats)
     neg_normalizer = NegativeActionNormalizeStep(stats=ds_meta.stats, normalize_min_max=True)
 
-    # ── 모델 초기화 ───────────────────────────────────────────────────────────
-    policy: GrootCLPolicy = make_policy(policy_config, ds_meta=ds_meta)
+    policy: GrootCLPolicy = make_policy(cfg.policy, ds_meta=ds_meta)
 
-    # policy, dataloader를 1회 prepare (DDP wrap + DistributedSampler 삽입)
+    if cfg.policy.lora_rank > 0:
+        if cfg.policy.lora_target in ("llm", "both") and cfg.policy.tune_llm:
+            logger.warning(
+                "lora_target=%r + tune_llm=True: LLM base weights도 학습 대상이 됩니다. "
+                "LoRA 표준 사용법은 tune_llm=False입니다.", cfg.policy.lora_target
+            )
+        if cfg.policy.lora_target in ("vision", "both") and cfg.policy.tune_visual:
+            logger.warning(
+                "lora_target=%r + tune_visual=True: Vision tower base weights도 학습 대상이 됩니다. "
+                "LoRA 표준 사용법은 tune_visual=False입니다.", cfg.policy.lora_target
+            )
+
+    accelerator.wait_for_everyone()
     policy, dataloader = accelerator.prepare(policy, dataloader)
 
     if accelerator.is_main_process:
         logger.info("Policy: %s", policy.__class__.__name__)
 
-    # ── 헬퍼 함수 ─────────────────────────────────────────────────────────────
-
-    def to_device(batch: dict) -> dict:
-        return {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
-
     def preprocess(raw_batch: dict) -> dict:
-        """negative_action을 파이프라인 밖에서 별도 정규화 후 병합."""
         raw_neg = raw_batch.pop("negative_action", None)
         processed = pre(raw_batch)
         if isinstance(raw_neg, torch.Tensor):
             result = neg_normalizer({"negative_action": raw_neg})
-            processed["negative_action"] = result.get("negative_action")
+            processed["negative_action"] = result["negative_action"].to(device)
         return processed
 
     def infinite_dataloader():
         while True:
             yield from dataloader
 
-    def save_checkpoint(tag: str) -> None:
+    def _save(step: int, optimizer, scheduler) -> None:
         if accelerator.is_main_process:
-            path = cfg.output_dir / tag
-            path.mkdir(parents=True, exist_ok=True)
-            accelerator.unwrap_model(policy).save_pretrained(path)
-            logger.info("체크포인트 저장: %s", path)
-
-    # ── 학습 루프 ─────────────────────────────────────────────────────────────
+            checkpoint_dir = get_step_checkpoint_dir(cfg.output_dir, cfg.steps, step)
+            save_checkpoint(
+                checkpoint_dir=checkpoint_dir,
+                step=step,
+                cfg=cfg,
+                policy=accelerator.unwrap_model(policy),
+                optimizer=optimizer,
+                scheduler=scheduler,
+            )
+            update_last_checkpoint(checkpoint_dir)
+            logger.info("체크포인트 저장: %s", checkpoint_dir)
 
     def train_loop(
         phase: str,
@@ -283,14 +261,14 @@ def main(cfg: GrootCLTrainConfig) -> None:
         lr: float,
         loss_weight: float,
         backprop_backbone: bool,
+        warmup_steps: int = 0,
         global_step_offset: int = 0,
     ) -> int:
-        """단일 phase 학습. 완료 후 마지막 global_step 반환."""
         if accelerator.is_main_process:
             logger.info("=" * 60)
             logger.info(
-                "Phase: %s | steps=%d | lr=%.2e | loss_weight=%.3f | backprop_backbone=%s",
-                phase, total_steps, lr, loss_weight, backprop_backbone,
+                "Phase: %s | steps=%d | lr=%.2e | loss_weight=%.3f | backprop_backbone=%s | warmup_steps=%d",
+                phase, total_steps, lr, loss_weight, backprop_backbone, warmup_steps,
             )
             logger.info("=" * 60)
 
@@ -299,15 +277,31 @@ def main(cfg: GrootCLTrainConfig) -> None:
         raw_policy.config.contrastive_loss_weight = loss_weight
         raw_policy.config.contrastive_backprop_backbone = backprop_backbone
 
+        if accelerator.is_main_process:
+            num_learnable = sum(p.numel() for p in raw_policy.parameters() if p.requires_grad)
+            num_total = sum(p.numel() for p in raw_policy.parameters())
+            logger.info(
+                "trainable params: %s / %s (%.2f%%)",
+                f"{num_learnable:,}", f"{num_total:,}", 100 * num_learnable / max(num_total, 1),
+            )
+            if cfg.policy.lora_rank > 0:
+                lora_params = sum(
+                    p.numel() for n, p in raw_policy.named_parameters()
+                    if p.requires_grad and "lora_" in n
+                )
+                logger.info("LoRA [%s] adapter params: %s", cfg.policy.lora_target, f"{lora_params:,}")
+
         optimizer = torch.optim.AdamW(
             filter(lambda p: p.requires_grad, raw_policy.parameters()),
             lr=lr,
-            betas=(0.95, 0.999),
-            eps=1e-8,
-            weight_decay=1e-5,
+            betas=cfg.policy.optimizer_betas,
+            eps=cfg.policy.optimizer_eps,
+            weight_decay=cfg.policy.optimizer_weight_decay,
         )
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=total_steps, eta_min=lr * 0.1
+        scheduler = get_cosine_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps=warmup_steps,
+            num_training_steps=total_steps,
         )
         optimizer, scheduler = accelerator.prepare(optimizer, scheduler)
 
@@ -317,19 +311,18 @@ def main(cfg: GrootCLTrainConfig) -> None:
         for step in range(1, total_steps + 1):
             raw_batch = next(data_stream)
             batch = preprocess(raw_batch)
-            batch = to_device(batch)
 
             loss, loss_dict = policy(batch)
 
-            optimizer.zero_grad()
             accelerator.backward(loss)
             grad_norm = accelerator.clip_grad_norm_(policy.parameters(), max_norm=10.0)
             optimizer.step()
             scheduler.step()
+            optimizer.zero_grad()
 
             global_step = global_step_offset + step
 
-            if accelerator.is_main_process and step % cfg.log_interval == 0:
+            if accelerator.is_main_process and step % cfg.log_freq == 0:
                 lr_now = scheduler.get_last_lr()[0]
                 log_str = " | ".join(f"{k}={v:.4f}" for k, v in loss_dict.items())
                 logger.info(
@@ -340,31 +333,33 @@ def main(cfg: GrootCLTrainConfig) -> None:
                 )
 
                 if use_wandb:
-                    wandb_log = {
-                        f"{phase}/loss": loss_dict.get("loss", loss.item()),
-                        f"{phase}/flow_matching_loss": loss_dict.get("flow_matching_loss", 0.0),
-                        f"{phase}/contrastive_loss": loss_dict.get("contrastive_loss", 0.0),
-                        f"{phase}/lr": lr_now,
-                        f"{phase}/grad_norm": (
-                            grad_norm.item()
-                            if isinstance(grad_norm, torch.Tensor)
-                            else float(grad_norm)
-                        ),
-                    }
-                    wandb.log(wandb_log, step=global_step)
+                    wandb.log(
+                        {
+                            f"{phase}/loss": loss_dict.get("loss", loss.item()),
+                            f"{phase}/flow_matching_loss": loss_dict.get("flow_matching_loss", 0.0),
+                            f"{phase}/contrastive_loss": loss_dict.get("contrastive_loss", 0.0),
+                            f"{phase}/lr": lr_now,
+                            f"{phase}/grad_norm": (
+                                grad_norm.item()
+                                if isinstance(grad_norm, torch.Tensor)
+                                else float(grad_norm)
+                            ),
+                        },
+                        step=global_step,
+                    )
 
-            if step % cfg.save_interval == 0 or step == total_steps:
+            if step % cfg.save_freq == 0 or step == total_steps:
                 accelerator.wait_for_everyone()
-                save_checkpoint(f"{phase}/step_{step:06d}")
+                _save(global_step, optimizer, scheduler)
 
                 if use_wandb and not cfg.wandb.disable_artifact:
-                    ckpt_path = cfg.output_dir / f"{phase}/step_{step:06d}"
+                    checkpoint_dir = get_step_checkpoint_dir(cfg.output_dir, cfg.steps, global_step)
                     artifact = wandb.Artifact(
                         name=f"{cfg.job_name}-{phase}-step{step:06d}",
                         type="model",
                         description=f"{phase} checkpoint at step {step}",
                     )
-                    artifact.add_dir(str(ckpt_path))
+                    artifact.add_dir(str(checkpoint_dir))
                     wandb.log_artifact(artifact)
 
         if accelerator.is_main_process:
@@ -372,23 +367,23 @@ def main(cfg: GrootCLTrainConfig) -> None:
 
         return global_step_offset + total_steps
 
-    # ── Phase 1: contrastive heads warm-up (_groot_model frozen) ─────────────
     global_step = train_loop(
         phase="phase1",
         total_steps=cfg.phase1_steps,
         lr=cfg.phase1_lr,
         loss_weight=1.0,
         backprop_backbone=False,
+        warmup_steps=0,
         global_step_offset=0,
     )
 
-    # ── Phase 2a: joint fine-tuning (contrastive gradient → VLM backbone) ────
     train_loop(
         phase="phase2a",
         total_steps=cfg.phase2a_steps,
         lr=cfg.phase2a_lr,
         loss_weight=cfg.phase2a_loss_weight,
         backprop_backbone=True,
+        warmup_steps=cfg.phase2a_warmup_steps,
         global_step_offset=global_step,
     )
 

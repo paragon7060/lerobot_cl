@@ -357,6 +357,7 @@ class GR00TN15(PreTrainedModel):
         lora_rank = kwargs.pop("lora_rank", 0)
         lora_alpha = kwargs.pop("lora_alpha", 16)
         lora_dropout = kwargs.pop("lora_dropout", 0.05)
+        lora_target = kwargs.pop("lora_target", "llm")
 
         print(f"Loading pretrained dual brain from {pretrained_model_name_or_path}")
         print(f"Tune backbone vision tower: {tune_visual}")
@@ -402,10 +403,19 @@ class GR00TN15(PreTrainedModel):
         )
 
         if lora_rank > 0:
-            pretrained_model.backbone.eagle_model.wrap_llm_lora(
-                r=lora_rank,
-                lora_alpha=lora_alpha,
-                lora_dropout=lora_dropout,
-            )
+            if lora_target in ("llm", "both"):
+                pretrained_model.backbone.eagle_model.wrap_llm_lora(
+                    r=lora_rank,
+                    lora_alpha=lora_alpha,
+                    lora_dropout=lora_dropout,
+                )
+                print(f"LLM LoRA applied: rank={lora_rank}")
+            if lora_target in ("vision", "both"):
+                pretrained_model.backbone.eagle_model.wrap_backbone_lora(
+                    r=lora_rank,
+                    lora_alpha=lora_alpha,
+                    lora_dropout=lora_dropout,
+                )
+                print(f"Vision tower LoRA applied: rank={lora_rank}")
 
         return pretrained_model

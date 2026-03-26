@@ -88,6 +88,7 @@ class GrootPolicy(PreTrainedPolicy):
             lora_rank=self.config.lora_rank,
             lora_alpha=self.config.lora_alpha,
             lora_dropout=self.config.lora_dropout,
+            lora_target=self.config.lora_target,
         )
 
         model.compute_dtype = "bfloat16" if self.config.use_bf16 else model.compute_dtype

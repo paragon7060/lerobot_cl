@@ -89,6 +89,9 @@ class GrootConfig(PreTrainedConfig):
     # Whether to use the full model for LORA
     lora_full_model: bool = False
 
+    # Which component to apply LoRA to: "llm" | "vision" | "both"
+    lora_target: str = "llm"
+
     # Training parameters (matching groot_finetune_script.py)
     optimizer_lr: float = 1e-4
     optimizer_betas: tuple[float, float] = (0.95, 0.999)
@@ -123,6 +126,11 @@ class GrootConfig(PreTrainedConfig):
         if self.n_action_steps > self.chunk_size:
             raise ValueError(
                 f"n_action_steps ({self.n_action_steps}) cannot exceed chunk_size ({self.chunk_size})"
+            )
+
+        if self.lora_rank > 0 and self.lora_target not in ("llm", "vision", "both"):
+            raise ValueError(
+                f"lora_target must be 'llm', 'vision', or 'both', got {self.lora_target!r}"
             )
 
         # groot_repo_path is now optional since we ported the components

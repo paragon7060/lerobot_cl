@@ -58,6 +58,7 @@ class GrootCLPolicy(GrootPolicy):
             lora_rank=self.config.lora_rank,
             lora_alpha=self.config.lora_alpha,
             lora_dropout=self.config.lora_dropout,
+            lora_target=self.config.lora_target,
         )
         model.compute_dtype = "bfloat16" if self.config.use_bf16 else model.compute_dtype
         model.config.compute_dtype = model.compute_dtype
@@ -124,9 +125,15 @@ class GrootCLPolicy(GrootPolicy):
             tune_diffusion_model=cfg.tune_diffusion_model,
         )
         if cfg.lora_rank > 0:
-            for name, param in self._groot_model.backbone.eagle_model.language_model.named_parameters():
-                if "lora_" in name:
-                    param.requires_grad_(True)
+            lora_target = getattr(cfg, "lora_target", "llm")
+            if lora_target in ("llm", "both"):
+                for name, param in self._groot_model.backbone.eagle_model.language_model.named_parameters():
+                    if "lora_" in name:
+                        param.requires_grad_(True)
+            if lora_target in ("vision", "both"):
+                for name, param in self._groot_model.backbone.eagle_model.vision_model.named_parameters():
+                    if "lora_" in name:
+                        param.requires_grad_(True)
 
     def forward(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict]:
         allowed_base = {"state", "state_mask", "action", "action_mask", "embodiment_id"}
