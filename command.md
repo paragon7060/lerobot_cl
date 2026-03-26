@@ -82,7 +82,10 @@ python src/lerobot/scripts/lerobot_train.py\
     --save_freq=10000
 
 ### arnold
-python src/lerobot/scripts/lerobot_train.py\
+CUDA_VISIBLE_DEVICES=0,1 accelerate launch \
+    --multi_gpu \
+    --num_processes=2 \
+    src/lerobot/scripts/lerobot_train.py\
     --dataset.repo_id=paragon7060/arnold_data_pickup_fixed \
     --policy.type=groot \
     --output_dir=./outputs/groot_arnold_baseline/ \
@@ -90,6 +93,7 @@ python src/lerobot/scripts/lerobot_train.py\
     --policy.repo_id=paragon7060/groot_arnold_baseline \
     --policy.push_to_hub=false \
     --steps=50000 \
+    --policy.tune_visual=true \
     --policy.device=cuda \
     --policy.batch_size=128 \
     --wandb.enable=true \
@@ -97,6 +101,8 @@ python src/lerobot/scripts/lerobot_train.py\
     --wandb.entity=RwHlabs \
     --wandb.disable_artifact=true \
     --save_freq=10000
+    2>&1 | tee outputs/baseline_arnold_log.txt
+
 
 # pi05 (lerobot050 / '~/lerobot_series/lerobot_050/lerobot' )
 ## Multi-GPU
