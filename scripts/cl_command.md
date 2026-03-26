@@ -78,13 +78,13 @@ python scripts/train_groot_cl.py \
     --dataset.repo_id=paragon7060/INSIGHTfixposV3 \
     --dataset.root=/mntvol1/INSIGHTBench/data/paragon7060/INSIGHTfixposV3 \
     --dataset.video_backend=pyav \
-    --neg_pairs_path=/home/bluepot/cl_ws/negative_pairs.json \
+    --neg_pairs_path=/home/bluepot/cl_ws/insight_negative.json \
     --policy.groot_pretrained_path=./outputs/groot_baseline/checkpoints/last_checkpoint/pretrained_model \
     --output_dir=./outputs/groot_cl_v1 \
     --job_name=groot_cl_v1 \
     --phase1_steps=2000 \
     --phase2a_steps=15000 \
-    --batch_size=4 \
+    --batch_size=32 \
     --policy.lora_rank=16 \
     --policy.lora_target=vision \
     --wandb.enable=true \

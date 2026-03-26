@@ -69,6 +69,26 @@ python scripts/train_groot_baseline.py \
     2>&1 | tee outputs/baseline_log.txt
 ```
 
+## test
+CUDA_VISIBLE_DEVICES=0,1,2,3 accelerate launch \
+    --multi_gpu \
+    --num_processes=4 \
+    $(which lerobot-train) \
+    --dataset.repo_id=paragon7060/INSIGHTfixposV3 \
+    --dataset.root=/mntvol1/INSIGHTBench/data/paragon7060/INSIGHTfixposV3 \
+    --dataset.video_backend=pyav \
+    --policy.type=groot \
+    --policy.repo_id=insight_groot_baseline_vt \
+    --output_dir=./outputs/insight_groot_baseline_vt \
+    --job_name=insight_groot_baseline_vt \
+    --steps=50000 \
+    --batch_size=32 \
+    --save_checkpoint=true \
+    --wandb.enable=true \
+    --wandb.project=groot_insight \
+    --wandb.entity=RwHlabs \
+    --wandb.disable_artifact=true \
+    2>&1 | tee outputs/baseline_log.txt
 ## Multi-GPU (4 GPU, effective BS = 4 × 32 = 128)
 
 ```bash
@@ -78,8 +98,9 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 accelerate launch \
     scripts/train_groot_baseline.py \
     --dataset.repo_id=paragon7060/INSIGHTfixposV3 \
     --dataset.root=/mntvol1/INSIGHTBench/data/paragon7060/INSIGHTfixposV3 \
-    --output_dir=./outputs/groot_baseline \
-    --job_name=groot_baseline_v1 \
+    --dataset.video_backend=pyav \
+    --output_dir=./outputs/insight_groot_baseline_vt \
+    --job_name=insight_groot_baseline_vt \
     --steps=50000 \
     --batch_size=32 \
     --policy.lora_rank=16 \
