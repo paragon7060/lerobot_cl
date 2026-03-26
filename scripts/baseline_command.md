@@ -90,25 +90,8 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 accelerate launch \
     --wandb.disable_artifact=true \
     2>&1 | tee outputs/baseline_log.txt
 ## Multi-GPU (4 GPU, effective BS = 4 × 32 = 128)
-
 ```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3 accelerate launch \
-    --num_processes=4 \
-    --mixed_precision=no \
-    scripts/train_groot_baseline.py \
-    --dataset.repo_id=paragon7060/INSIGHTfixposV3 \
-    --dataset.root=/mntvol1/INSIGHTBench/data/paragon7060/INSIGHTfixposV3 \
-    --dataset.video_backend=pyav \
-    --output_dir=./outputs/insight_groot_baseline_vt \
-    --job_name=insight_groot_baseline_vt \
-    --steps=50000 \
-    --batch_size=32 \
-    --policy.lora_rank=16 \
-    --policy.lora_target=vision \
-    --wandb.enable=true \
-    --wandb.project=groot_insight \
-    --wandb.entity=RwHlabs \
-    2>&1 | tee outputs/baseline_log.txt
+CUDA_VISIBLE_DEVICES=0,1,2,3 accelerate launch     --num_processes=4     --mixed_precision=no     scripts/train_groot_baseline.py     --dataset.repo_id=paragon7060/INSIGHTfixposV3     --dataset.root=/mntvol1/INSIGHTBench/data/paragon7060/INSIGHTfixposV3     --dataset.video_backend=pyav     --output_dir=./outputs/insight_groot_baseline_vt     --job_name=insight_groot_baseline_vt     --steps=50000     --batch_size=32     --policy.lora_rank=16     --policy.lora_target=vision     --wandb.enable=true     --wandb.project=groot_insight     --wandb.entity=RwHlabs     2>&1 | tee outputs/baseline_log.txt
 ```
 
 ## tmux 세션 (서버 권장)
