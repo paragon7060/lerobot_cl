@@ -9,6 +9,7 @@ Phase 2a: joint fine-tuning (LoRA + projector + diffusion + contrastive heads, w
       --dataset.repo_id=paragon7060/INSIGHTfixposV3 \
       --dataset.root=/mntvol1/INSIGHTBench/data/paragon7060/INSIGHTfixposV3 \
       --dataset.video_backend=pyav \
+      --policy.type=groot_cl \
       --output_dir=./outputs/groot_cl \
       --job_name=groot_cl_run1 \
       --phase1_steps=500 \
@@ -20,7 +21,7 @@ Phase 2a: joint fine-tuning (LoRA + projector + diffusion + contrastive heads, w
       --wandb.disable_artifact=true
 
 Multi-GPU 실행:
-  accelerate launch --num_processes 2 scripts/train_groot_cl.py [same args]
+  accelerate launch --num_processes 2 scripts/train_groot_cl.py --policy.type=groot_cl [same args]
 
 주의: negative_action은 preprocess() 내에서 NegativeActionNormalizeStep을 직접 호출하여
       수동으로 정규화한다. pipeline(pre)은 make_groot_pre_post_processors에서 생성한다.
@@ -41,6 +42,7 @@ from transformers import get_cosine_schedule_with_warmup
 
 from lerobot.configs import parser
 from lerobot.configs.default import DatasetConfig
+from lerobot.configs.policies import PreTrainedConfig
 from lerobot.configs.train import TrainPipelineConfig
 from lerobot.datasets.contrastive_dataset import ContrastiveLeRobotDataset
 from lerobot.datasets.dataset_metadata import LeRobotDatasetMetadata
@@ -72,7 +74,7 @@ class GrootCLTrainConfig(TrainPipelineConfig):
             video_backend="pyav",
         )
     )
-    policy: GrootCLConfig = field(default_factory=GrootCLConfig)
+    policy: PreTrainedConfig | None = None
 
     steps: int = 17_000
     batch_size: int = 4

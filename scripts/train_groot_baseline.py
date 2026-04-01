@@ -3,25 +3,26 @@
 
 학습 모드별 권장 설정:
   Vision LoRA (경량, 기본 권장, ~12 GB VRAM):
-    --policy.lora_rank=16 --policy.lora_target=vision --policy.tune_llm=false --policy.tune_visual=false
+    --policy.type=groot --policy.lora_rank=16 --policy.lora_target=vision
 
   LLM LoRA (~22 GB VRAM, gradient checkpointing 권장):
-    --policy.lora_rank=16 --policy.lora_target=llm --gradient_checkpointing=true
+    --policy.type=groot --policy.lora_rank=16 --policy.lora_target=llm --gradient_checkpointing=true
 
   Full LoRA (LLM + Vision, ~28 GB VRAM):
-    --policy.lora_rank=16 --policy.lora_target=both --gradient_checkpointing=true
+    --policy.type=groot --policy.lora_rank=16 --policy.lora_target=both --gradient_checkpointing=true
 
   Partial frozen (LoRA 없음, ~14 GB VRAM):
-    --policy.lora_rank=0
+    --policy.type=groot --policy.lora_rank=0
 
   Full finetuning (~35 GB+ VRAM):
-    --policy.tune_llm=true --policy.lora_rank=0 --gradient_checkpointing=true
+    --policy.type=groot --policy.tune_llm=true --policy.lora_rank=0 --gradient_checkpointing=true
 
 단일 GPU 실행:
   python scripts/train_groot_baseline.py \
       --dataset.repo_id=paragon7060/INSIGHTfixposV3 \
       --dataset.root=/mntvol1/INSIGHTBench/data/paragon7060/INSIGHTfixposV3 \
       --dataset.video_backend=pyav \
+      --policy.type=groot \
       --output_dir=./outputs/groot_baseline \
       --job_name=groot_baseline_v1 \
       --steps=50000 \
@@ -35,6 +36,7 @@
 Multi-GPU 실행 (예: 4 GPU, effective BS = 4 x 32 = 128):
   accelerate launch --num_processes=4 --mixed_precision=no \
       scripts/train_groot_baseline.py \
+      --policy.type=groot \
       --batch_size=32 [other args]
 """
 
@@ -53,12 +55,12 @@ from transformers import get_cosine_schedule_with_warmup
 
 from lerobot.configs import parser
 from lerobot.configs.default import DatasetConfig
+from lerobot.configs.policies import PreTrainedConfig
 from lerobot.configs.train import TrainPipelineConfig
 from lerobot.datasets.dataset_metadata import LeRobotDatasetMetadata
 from lerobot.datasets.factory import resolve_delta_timestamps
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.policies.factory import make_policy, make_pre_post_processors
-from lerobot.policies.groot.configuration_groot import GrootConfig
 from lerobot.utils.train_utils import (
     get_step_checkpoint_dir,
     save_checkpoint,
@@ -81,7 +83,7 @@ class GrootBaselineTrainConfig(TrainPipelineConfig):
             video_backend="pyav",
         )
     )
-    policy: GrootConfig = field(default_factory=GrootConfig)
+    policy: PreTrainedConfig | None = None
 
     steps: int = 50_000
     batch_size: int = 128

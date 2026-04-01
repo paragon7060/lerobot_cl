@@ -6,10 +6,13 @@
 
 | 그룹 | 접두사 | 예시 |
 |---|---|---|
+| 정책 타입 선택 | `--policy.type` | `--policy.type=groot` (**필수**) |
 | 데이터셋 | `--dataset.*` | `--dataset.repo_id=X` |
 | 정책/모델 | `--policy.*` | `--policy.lora_rank=16` |
 | WandB | `--wandb.*` | `--wandb.enable=true` |
 | 학습 루프 | (최상위) | `--steps=50000` |
+
+> `--policy.type=groot` 은 필수 인수야. 이 값이 없으면 `--policy.*` CLI override가 적용되지 않음.
 
 ---
 
@@ -20,6 +23,7 @@ python scripts/train_groot_baseline.py \
     --dataset.repo_id=paragon7060/INSIGHTfixposV3 \
     --dataset.root=/mntvol1/INSIGHTBench/data/paragon7060/INSIGHTfixposV3 \
     --dataset.video_backend=pyav \
+    --policy.type=groot \
     --output_dir=./outputs/groot_baseline \
     --job_name=groot_baseline_v1 \
     --steps=50000 \
@@ -33,12 +37,33 @@ python scripts/train_groot_baseline.py \
     2>&1 | tee outputs/baseline_log.txt
 ```
 
+## 단일 GPU — Vision tower full fine-tuning (~20 GB VRAM)
+
+```bash
+python scripts/train_groot_baseline.py \
+    --dataset.repo_id=paragon7060/INSIGHTfixposV3 \
+    --dataset.root=/mntvol1/INSIGHTBench/data/paragon7060/INSIGHTfixposV3 \
+    --dataset.video_backend=pyav \
+    --policy.type=groot \
+    --output_dir=./outputs/groot_baseline_vt \
+    --job_name=groot_baseline_vt \
+    --steps=100000 \
+    --batch_size=32 \
+    --policy.lora_rank=0 \
+    --policy.tune_visual=true \
+    --wandb.enable=true \
+    --wandb.project=groot_insight \
+    --wandb.entity=RwHlabs \
+    2>&1 | tee outputs/baseline_log.txt
+```
+
 ## 단일 GPU — LLM LoRA (~22 GB VRAM)
 
 ```bash
 python scripts/train_groot_baseline.py \
     --dataset.repo_id=paragon7060/INSIGHTfixposV3 \
     --dataset.root=/mntvol1/INSIGHTBench/data/paragon7060/INSIGHTfixposV3 \
+    --policy.type=groot \
     --output_dir=./outputs/groot_baseline_llm \
     --job_name=groot_baseline_llm \
     --steps=50000 \
@@ -58,6 +83,7 @@ python scripts/train_groot_baseline.py \
 python scripts/train_groot_baseline.py \
     --dataset.repo_id=paragon7060/INSIGHTfixposV3 \
     --dataset.root=/mntvol1/INSIGHTBench/data/paragon7060/INSIGHTfixposV3 \
+    --policy.type=groot \
     --output_dir=./outputs/groot_baseline_nolora \
     --job_name=groot_baseline_nolora \
     --steps=50000 \
@@ -69,29 +95,27 @@ python scripts/train_groot_baseline.py \
     2>&1 | tee outputs/baseline_log.txt
 ```
 
-## test
+## Multi-GPU (4 GPU, effective BS = 4 × 32 = 128)
+
+```bash
 CUDA_VISIBLE_DEVICES=0,1,2,3 accelerate launch \
-    --multi_gpu \
     --num_processes=4 \
-    $(which lerobot-train) \
+    --mixed_precision=no \
+    scripts/train_groot_baseline.py \
     --dataset.repo_id=paragon7060/INSIGHTfixposV3 \
     --dataset.root=/mntvol1/INSIGHTBench/data/paragon7060/INSIGHTfixposV3 \
     --dataset.video_backend=pyav \
     --policy.type=groot \
-    --policy.repo_id=insight_groot_baseline_vt \
-    --output_dir=./outputs/insight_groot_baseline_vt \
-    --job_name=insight_groot_baseline_vt \
+    --output_dir=./outputs/groot_baseline \
+    --job_name=groot_baseline_v1 \
     --steps=50000 \
     --batch_size=32 \
-    --save_checkpoint=true \
+    --policy.lora_rank=16 \
+    --policy.lora_target=vision \
     --wandb.enable=true \
     --wandb.project=groot_insight \
     --wandb.entity=RwHlabs \
-    --wandb.disable_artifact=true \
     2>&1 | tee outputs/baseline_log.txt
-## Multi-GPU (4 GPU, effective BS = 4 × 32 = 128)
-```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3 accelerate launch     --num_processes=4     --mixed_precision=no     scripts/train_groot_baseline.py     --dataset.repo_id=paragon7060/INSIGHTfixposV3     --dataset.root=/mntvol1/INSIGHTBench/data/paragon7060/INSIGHTfixposV3     --dataset.video_backend=pyav     --output_dir=./outputs/insight_groot_baseline_vt     --job_name=insight_groot_baseline_vt     --steps=50000     --batch_size=32     --policy.lora_rank=16     --policy.lora_target=vision     --wandb.enable=true     --wandb.project=groot_insight     --wandb.entity=RwHlabs     2>&1 | tee outputs/baseline_log.txt
 ```
 
 ## tmux 세션 (서버 권장)
@@ -107,6 +131,8 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 accelerate launch \
     scripts/train_groot_baseline.py \
     --dataset.repo_id=paragon7060/INSIGHTfixposV3 \
     --dataset.root=/mntvol1/INSIGHTBench/data/paragon7060/INSIGHTfixposV3 \
+    --dataset.video_backend=pyav \
+    --policy.type=groot \
     --output_dir=./outputs/groot_baseline \
     --job_name=groot_baseline_v1 \
     --steps=50000 \
@@ -137,6 +163,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 accelerate launch \
 
 | 인수 | 기본값 | 설명 |
 |---|---|---|
+| `--policy.type` | (**필수**) | 반드시 `groot` 지정 |
 | `--policy.base_model_path` | `nvidia/GR00T-N1.5-3B` | 베이스 GR00T 모델 |
 | `--policy.lora_rank` | `0` | LoRA rank (0이면 LoRA 비활성화) |
 | `--policy.lora_alpha` | `16` | LoRA alpha |
