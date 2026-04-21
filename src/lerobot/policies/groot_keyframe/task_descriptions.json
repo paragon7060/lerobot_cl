@@ -1,0 +1,15 @@
+{
+  "1ext": "Find the arrow guide and open the indicated drawer.",
+  "3a": "Open the door, rotate clockwise and push.",
+  "3b": "Open the door, rotate counter-clockwise and push.",
+  "3c": "Open the door, rotate clockwise and pull.",
+  "3d": "Open the door, rotate counter-clockwise and pull.",
+  "5a": "Grip the cap on the sides indicated by the 'squeeze' arrow and open the bottle in counter-clockwise direction.",
+  "5b": "Open the bottle in counter-clockwise direction.",
+  "5c": "Open the bottle in clockwise direction.",
+  "5d": "Close the bottle in clockwise direction.",
+  "5e": "Close the bottle in counter-clockwise direction.",
+  "5f": "Close the bottle in clockwise direction.",
+  "5g": "Grip the cap on the sides indicated by the 'squeeze' arrow and open the bottle in clockwise direction.",
+  "5h": "Close the bottle in counter-clockwise direction."
+}

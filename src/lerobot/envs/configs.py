@@ -454,3 +454,36 @@ class IsaaclabArenaEnv(HubEnvConfig):
     @property
     def gym_kwargs(self) -> dict:
         return {}
+
+
+# ------------------------ Robocasa365 --------------------------------
+
+@EnvConfig.register_subclass("robocasa")
+@dataclass
+class RoboCasaEnv(HubEnvConfig):
+
+    hub_path: str = "Whalswp/RoboCasa_Env" 
+    
+    task: str | None = None
+    obs_type: str = "pixels_agent_pos"
+    render_mode: str = "rgb_array"
+    camera_name: str = "robot0_agentview_left,robot0_eye_in_hand,robot0_agentview_right"
+    observation_height: int = 256
+    observation_width: int = 256
+    split: str | None = None
+
+    # VLA 모델 등에서 사용할 Observation & Action 규격 매핑
+    features: dict[str, PolicyFeature] = field(default_factory=lambda: {
+        ACTION: PolicyFeature(type=FeatureType.ACTION, shape=(12,)),
+        "agent_pos": PolicyFeature(type=FeatureType.STATE, shape=(16,)),
+        "pixels/robot0_agentview_left": PolicyFeature(type=FeatureType.VISUAL, shape=(256, 256, 3)),
+        "pixels/robot0_agentview_right": PolicyFeature(type=FeatureType.VISUAL, shape=(256, 256, 3)),
+        "pixels/robot0_eye_in_hand": PolicyFeature(type=FeatureType.VISUAL, shape=(256, 256, 3)),
+    })
+    features_map: dict[str, str] = field(default_factory=lambda: {
+        ACTION: ACTION,
+        "agent_pos": OBS_STATE,
+        "pixels/robot0_agentview_left": f"{OBS_IMAGES}.robot0_agentview_left",
+        "pixels/robot0_agentview_right": f"{OBS_IMAGES}.robot0_agentview_right",
+        "pixels/robot0_eye_in_hand": f"{OBS_IMAGES}.robot0_eye_in_hand",
+    })

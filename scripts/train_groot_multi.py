@@ -1,43 +1,43 @@
 #!/usr/bin/env python
-"""GR00T Baseline 학습 스크립트 (accelerate + lerobot parser CLI + wandb 지원).
+"""GR00T Multi-Dataset 학습 스크립트
 
-학습 모드별 권장 설정:
-  Vision LoRA (경량, 기본 권장, ~12 GB VRAM):
-    --policy.type=groot --policy.lora_rank=16 --policy.lora_target=vision
+로컬 경로의 4개 그룹 (각 그룹은 task_XXXX 서브디렉토리로 쪼개진 LeRobot 데이터셋)을
+MultiLeRobotDataset으로 합쳐서 학습한다.
 
-  LLM LoRA (~22 GB VRAM, gradient checkpointing 권장):
-    --policy.type=groot --policy.lora_rank=16 --policy.lora_target=llm --gradient_checkpointing=true
-
-  Full LoRA (LLM + Vision, ~28 GB VRAM):
-    --policy.type=groot --policy.lora_rank=16 --policy.lora_target=both --gradient_checkpointing=true
-
-  Partial frozen (LoRA 없음, ~14 GB VRAM):
-    --policy.type=groot --policy.lora_rank=0
-
-  Full finetuning (~35 GB+ VRAM):
-    --policy.type=groot --policy.tune_llm=true --policy.lora_rank=0 --gradient_checkpointing=true
+데이터셋 경로 구조:
+  {dataset_root}/
+    robocasa_pretrain_human_atomic/task_0001/{meta,data,videos}
+    robocasa_pretrain_human_atomic/task_0002/...
+    robocasa_pretrain_human_composite/task_0001/...
+    robocasa_target_human_atomic/task_0001/...
+    robocasa_target_human_composite/task_0001/...
 
 단일 GPU 실행:
-  python scripts/train_groot_baseline.py \
-      --dataset.repo_id=paragon7060/INSIGHTfixposV3 \
-      --dataset.root=/mntvol1/INSIGHTBench/data/paragon7060/INSIGHTfixposV3 \
-      --dataset.video_backend=pyav \
+  python scripts/train_groot_multi.py \
+      --dataset.root=/home/seonho/slicing_robocasa_human_v3 \
       --policy.type=groot \
-      --output_dir=./outputs/groot_baseline \
-      --job_name=groot_baseline_v1 \
-      --steps=50000 \
+      --output_dir=./outputs/groot_multi \
+      --job_name=groot_multi_v1 \
+      --steps=100000 \
       --batch_size=128 \
-      --policy.lora_rank=16 \
-      --policy.lora_target=vision \
+      --policy.tune_visual=false \
+      --policy.tune_llm=false \
       --wandb.enable=true \
-      --wandb.project=groot_insight \
+      --wandb.project=groot_robocasa \
       --wandb.entity=RwHlabs
 
-Multi-GPU 실행 (예: 4 GPU, effective BS = 4 x 32 = 128):
-  accelerate launch --num_processes=4 --mixed_precision=no \
-      scripts/train_groot_baseline.py \
-      --policy.type=groot \
-      --batch_size=32 [other args]
+Multi-GPU 실행 (예: 2 GPU, effective BS = 64x2 = 128):
+  CUDA_VISIBLE_DEVICES=0,1 accelerate launch \\
+      --num_processes=2 \\
+      scripts/train_groot_multi.py \\
+      --dataset.root=/home/seonho/slicing_robocasa_human_v3 \\
+      --policy.type=groot \\
+      --output_dir=./outputs/groot_multi \\
+      --batch_size=64 \\
+      --steps=100000 \\
+      --policy.tune_visual=false \\
+      --policy.tune_llm=false \\
+      --wandb.enable=true
 """
 
 import logging
@@ -59,13 +59,16 @@ from lerobot.configs.policies import PreTrainedConfig
 from lerobot.configs.train import TrainPipelineConfig
 from lerobot.datasets.dataset_metadata import LeRobotDatasetMetadata
 from lerobot.datasets.factory import resolve_delta_timestamps
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.datasets.multi_dataset import MultiLeRobotDataset
 from lerobot.policies.factory import make_policy, make_pre_post_processors
 from lerobot.utils.train_utils import (
     get_step_checkpoint_dir,
+    load_training_state,
     save_checkpoint,
     update_last_checkpoint,
 )
+
+LAST_CHECKPOINT_LINK = "last"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -73,19 +76,55 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+TOP_LEVEL_DIRS = [
+    "robocasa_pretrain_human_atomic",
+    "robocasa_pretrain_human_composite",
+    #"robocasa_target_human_atomic",
+    #"robocasa_target_human_composite",
+]
+
+
+def get_task_repo_ids(root: Path) -> list[str]:
+    """root 아래 각 top-level dir의 task_XXXX 서브디렉토리를 열거한다.
+    반환값: ["robocasa_pretrain_human_atomic/task_0001", ...] 형식
+    MultiLeRobotDataset은 root / repo_id 경로로 로드하므로 이 형식이 맞다.
+    """
+    repo_ids = []
+    for top_dir in TOP_LEVEL_DIRS:
+        top_path = root / top_dir
+        if not top_path.exists():
+            raise FileNotFoundError(f"데이터셋 경로 없음: {top_path}")
+        tasks = sorted(
+            p.name for p in top_path.iterdir()
+            if p.is_dir() and p.name.startswith("task_")
+            and (p / "meta" / "info.json").exists()
+            and (p / "meta" / "episodes").exists()
+        )
+        skipped = sum(
+            1 for p in top_path.iterdir()
+            if p.is_dir() and p.name.startswith("task_")
+            and not ((p / "meta" / "info.json").exists() and (p / "meta" / "episodes").exists())
+        )
+        if skipped:
+            logger.warning("%s: %d개 task에 meta 없음 → 건너뜀", top_dir, skipped)
+        if not tasks:
+            raise RuntimeError(f"유효한 task 없음: {top_path}")
+        repo_ids.extend(f"{top_dir}/{t}" for t in tasks)
+    return repo_ids
+
 
 @dataclass
-class GrootBaselineTrainConfig(TrainPipelineConfig):
+class GrootMultiTrainConfig(TrainPipelineConfig):
     dataset: DatasetConfig = field(
         default_factory=lambda: DatasetConfig(
-            repo_id="paragon7060/INSIGHTfixposV3",
-            root=None,
+            repo_id="",  # 사용 안 함 (multi-dataset이므로)
+            root="/home/seonho/slicing_robocasa_human_v3",
             video_backend="pyav",
         )
     )
     policy: PreTrainedConfig | None = None
 
-    steps: int = 50_000
+    steps: int = 100_000
     batch_size: int = 128
     num_workers: int = 8
     log_freq: int = 100
@@ -94,18 +133,19 @@ class GrootBaselineTrainConfig(TrainPipelineConfig):
     use_policy_training_preset: bool = False
 
     gradient_checkpointing: bool = False
+    resume: bool = False
 
     def validate(self) -> None:
         if self.policy is None:
             raise ValueError("policy must be set")
         if not self.job_name:
-            self.job_name = "groot_baseline"
+            self.job_name = "groot_multi"
         if not self.output_dir:
-            self.output_dir = Path("outputs/groot_baseline")
+            self.output_dir = Path("outputs/groot_multi")
 
 
 @parser.wrap()
-def main(cfg: GrootBaselineTrainConfig) -> None:
+def main(cfg: GrootMultiTrainConfig) -> None:
     ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
     accelerator = Accelerator(
         mixed_precision="no",
@@ -120,10 +160,52 @@ def main(cfg: GrootBaselineTrainConfig) -> None:
     torch.backends.cudnn.benchmark = True
     torch.backends.cuda.matmul.allow_tf32 = True
 
+    dataset_root = Path(cfg.dataset.root)
+
+    # task_XXXX 서브디렉토리 열거 (모든 프로세스에서 동일하게 실행)
+    repo_ids = get_task_repo_ids(dataset_root)
+
     if accelerator.is_main_process:
         cfg.output_dir.mkdir(parents=True, exist_ok=True)
         logger.info("Output dir: %s", cfg.output_dir)
         logger.info("Accelerator: num_processes=%d, device=%s", accelerator.num_processes, device)
+        logger.info("Dataset root: %s", dataset_root)
+        logger.info("총 task 수: %d", len(repo_ids))
+
+    # delta_timestamps는 첫 번째 task 기준으로 계산 (fps/feature 구조 동일하다고 가정)
+    first_ds_meta = LeRobotDatasetMetadata(
+        repo_id=repo_ids[0],
+        root=dataset_root / repo_ids[0],
+    )
+    delta_timestamps = resolve_delta_timestamps(cfg.policy, first_ds_meta)
+
+    # MultiLeRobotDataset: root/repo_id 경로로 각 task를 로드
+    # accelerate 환경에서 main process 먼저 로드 후 나머지 동기화
+    if accelerator.is_main_process:
+        dataset = MultiLeRobotDataset(
+            repo_ids=repo_ids,
+            root=dataset_root,
+            delta_timestamps=delta_timestamps,
+            video_backend=cfg.dataset.video_backend,
+        )
+    accelerator.wait_for_everyone()
+    if not accelerator.is_main_process:
+        dataset = MultiLeRobotDataset(
+            repo_ids=repo_ids,
+            root=dataset_root,
+            delta_timestamps=delta_timestamps,
+            video_backend=cfg.dataset.video_backend,
+        )
+
+    if accelerator.is_main_process:
+        logger.info(
+            "MultiLeRobotDataset: %d frames, %d episodes across %d tasks",
+            dataset.num_frames,
+            dataset.num_episodes,
+            len(repo_ids),
+        )
+        if dataset.disabled_features:
+            logger.warning("비활성화된 features (task 간 불일치): %s", dataset.disabled_features)
 
     use_wandb = cfg.wandb.enable and accelerator.is_main_process
     if use_wandb:
@@ -134,10 +216,12 @@ def main(cfg: GrootBaselineTrainConfig) -> None:
             notes=cfg.wandb.notes,
             id=cfg.wandb.run_id,
             mode=cfg.wandb.mode,
+            resume="allow" if cfg.resume else None,
             dir=str(cfg.output_dir),
             config={
-                "repo_id": cfg.dataset.repo_id,
-                "base_model_path": cfg.policy.base_model_path,
+                "repo_ids": repo_ids,
+                "top_level_dirs": TOP_LEVEL_DIRS,
+                "dataset_root": str(dataset_root),
                 "steps": cfg.steps,
                 "lr": cfg.policy.optimizer_lr,
                 "batch_size": cfg.batch_size,
@@ -148,37 +232,14 @@ def main(cfg: GrootBaselineTrainConfig) -> None:
                 "tune_projector": cfg.policy.tune_projector,
                 "tune_diffusion_model": cfg.policy.tune_diffusion_model,
                 "lora_rank": cfg.policy.lora_rank,
-                "lora_alpha": cfg.policy.lora_alpha,
-                "lora_dropout": cfg.policy.lora_dropout,
-                "lora_target": cfg.policy.lora_target,
                 "gradient_checkpointing": cfg.gradient_checkpointing,
                 "seed": cfg.seed,
+                "total_frames": dataset.num_frames,
+                "total_episodes": dataset.num_episodes,
             },
             save_code=False,
         )
         logger.info("WandB initialized: project=%s, run=%s", cfg.wandb.project, wandb.run.name)
-
-    ds_meta = LeRobotDatasetMetadata(repo_id=cfg.dataset.repo_id, root=cfg.dataset.root)
-    delta_timestamps = resolve_delta_timestamps(cfg.policy, ds_meta)
-
-    if accelerator.is_main_process:
-        dataset = LeRobotDataset(
-            repo_id=cfg.dataset.repo_id,
-            root=cfg.dataset.root,
-            delta_timestamps=delta_timestamps,
-            video_backend=cfg.dataset.video_backend,
-        )
-    accelerator.wait_for_everyone()
-    if not accelerator.is_main_process:
-        dataset = LeRobotDataset(
-            repo_id=cfg.dataset.repo_id,
-            root=cfg.dataset.root,
-            delta_timestamps=delta_timestamps,
-            video_backend=cfg.dataset.video_backend,
-        )
-
-    if accelerator.is_main_process:
-        logger.info("Dataset: %d frames, %d episodes", dataset.num_frames, dataset.num_episodes)
 
     dataloader = DataLoader(
         dataset,
@@ -190,21 +251,11 @@ def main(cfg: GrootBaselineTrainConfig) -> None:
         prefetch_factor=2 if cfg.num_workers > 0 else None,
     )
 
-    pre, post = make_pre_post_processors(cfg.policy, dataset_stats=ds_meta.stats)
+    # stats는 MultiLeRobotDataset의 aggregated stats 사용
+    pre, _ = make_pre_post_processors(cfg.policy, dataset_stats=dataset.stats)
 
-    policy = make_policy(cfg.policy, ds_meta=ds_meta)
-
-    if cfg.policy.lora_rank > 0:
-        if cfg.policy.lora_target in ("llm", "both") and cfg.policy.tune_llm:
-            logger.warning(
-                "lora_target=%r + tune_llm=True: LLM base weights도 학습 대상이 됩니다. "
-                "LoRA 표준 사용법은 tune_llm=False입니다.", cfg.policy.lora_target
-            )
-        if cfg.policy.lora_target in ("vision", "both") and cfg.policy.tune_visual:
-            logger.warning(
-                "lora_target=%r + tune_visual=True: Vision tower base weights도 학습 대상이 됩니다. "
-                "LoRA 표준 사용법은 tune_visual=False입니다.", cfg.policy.lora_target
-            )
+    # make_policy에는 첫 번째 task ds_meta 전달 (feature shape 추론용)
+    policy = make_policy(cfg.policy, ds_meta=first_ds_meta)
 
     if cfg.gradient_checkpointing:
         policy._groot_model.gradient_checkpointing_enable()
@@ -229,27 +280,31 @@ def main(cfg: GrootBaselineTrainConfig) -> None:
     accelerator.wait_for_everyone()
     policy, optimizer, dataloader, scheduler = accelerator.prepare(policy, optimizer, dataloader, scheduler)
 
+    # ── Resume from checkpoint ────────────────────────────────────────────
+    start_step = 0
+    if cfg.resume:
+        last_link = Path(cfg.output_dir) / "checkpoints" / LAST_CHECKPOINT_LINK
+        if last_link.exists():
+            resume_dir = last_link.resolve()
+            logger.info("Resuming from checkpoint: %s", resume_dir)
+            # Load model weights
+            from safetensors.torch import load_model as safetensors_load_model
+            model_path = resume_dir / "pretrained_model" / "model.safetensors"
+            safetensors_load_model(accelerator.unwrap_model(policy), str(model_path))
+            # Load optimizer, scheduler, rng state
+            start_step, optimizer, scheduler = load_training_state(
+                resume_dir, optimizer, scheduler
+            )
+            logger.info("Resumed at step %d", start_step)
+        else:
+            logger.warning("--resume=true but no checkpoint found at %s, training from scratch", last_link)
+
     if accelerator.is_main_process:
         num_learnable_params = sum(p.numel() for p in policy.parameters() if p.requires_grad)
         num_total_params = sum(p.numel() for p in policy.parameters())
         logger.info("num_learnable_params=%s", f"{num_learnable_params:,}")
         logger.info("num_total_params=%s", f"{num_total_params:,}")
         logger.info("trainable ratio=%.2f%%", 100 * num_learnable_params / max(num_total_params, 1))
-
-        if cfg.policy.lora_rank > 0:
-            lora_params = sum(
-                p.numel() for n, p in policy.named_parameters()
-                if p.requires_grad and "lora_" in n
-            )
-            logger.info(
-                "LoRA [%s] adapter params: %s (trainable total: %s / %s)",
-                cfg.policy.lora_target,
-                f"{lora_params:,}",
-                f"{num_learnable_params:,}",
-                f"{num_total_params:,}",
-            )
-
-        logger.info("Policy: %s", policy.__class__.__name__)
 
     def infinite_dataloader():
         while True:
@@ -265,8 +320,6 @@ def main(cfg: GrootBaselineTrainConfig) -> None:
                 policy=accelerator.unwrap_model(policy),
                 optimizer=optimizer,
                 scheduler=scheduler,
-                preprocessor=pre,
-                postprocessor=post,
             )
             update_last_checkpoint(checkpoint_dir)
             logger.info("체크포인트 저장: %s", checkpoint_dir)
@@ -274,7 +327,7 @@ def main(cfg: GrootBaselineTrainConfig) -> None:
     policy.train()
     data_stream = infinite_dataloader()
 
-    for step in range(1, cfg.steps + 1):
+    for step in range(start_step + 1, cfg.steps + 1):
         raw_batch = next(data_stream)
         batch = pre(raw_batch)
 
@@ -327,7 +380,10 @@ def main(cfg: GrootBaselineTrainConfig) -> None:
     _save(cfg.steps)
 
     if accelerator.is_main_process:
-        logger.info("학습 완료. 최종 체크포인트: %s", get_step_checkpoint_dir(cfg.output_dir, cfg.steps, cfg.steps))
+        logger.info(
+            "학습 완료. 최종 체크포인트: %s",
+            get_step_checkpoint_dir(cfg.output_dir, cfg.steps, cfg.steps),
+        )
 
     if use_wandb:
         wandb.finish()

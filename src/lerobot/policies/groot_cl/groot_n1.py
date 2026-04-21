@@ -301,10 +301,11 @@ class GR00TN15(PreTrainedModel):
         self,
         inputs: dict,
         return_intermediate: bool = False,
+        joint_weights=None,
     ) -> BatchFeature:
         backbone_inputs, action_inputs = self.prepare_input(inputs)
         backbone_outputs = self.backbone(backbone_inputs)
-        action_head_outputs = self.action_head(backbone_outputs, action_inputs)
+        action_head_outputs = self.action_head(backbone_outputs, action_inputs, joint_weights=joint_weights)
         # action_head.forward() calls process_backbone_output() internally, so
         # backbone_outputs["backbone_features"] is now vlln+vl_self_attention processed.
         self.validate_data(action_head_outputs, backbone_outputs, is_training=True)

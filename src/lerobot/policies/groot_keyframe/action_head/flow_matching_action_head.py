@@ -267,7 +267,7 @@ class FlowmatchingActionHead(nn.Module):
         backbone_output["backbone_features"] = backbone_features
         return backbone_output
 
-    def forward(self, backbone_output: BatchFeature, action_input: BatchFeature, joint_weights=None) -> BatchFeature:
+    def forward(self, backbone_output: BatchFeature, action_input: BatchFeature) -> BatchFeature:
         # Set frozen modules to eval
         self.set_frozen_modules_to_eval_mode()
 
@@ -339,15 +339,8 @@ class FlowmatchingActionHead(nn.Module):
 
         # Slice out only the action portion of pred and target.
         action_mask = action_input.action_mask
-        if joint_weights is None:
-            # Default: binary mask — valid joints = 1, padding = 0
-            weight = action_mask.float()
-        else:
-            # Per-joint weights: (max_action_dim,) float tensor.
-            # padding joints have weight=0.0, so action_mask is subsumed.
-            weight = joint_weights.to(pred_actions.device).view(1, 1, -1).expand_as(pred_actions)
-        loss = F.mse_loss(pred_actions, velocity, reduction="none") * weight
-        loss = loss.sum() / weight.sum().clamp(min=1e-8)
+        loss = F.mse_loss(pred_actions, velocity, reduction="none") * action_mask
+        loss = loss.sum() / action_mask.sum()
         output_dict = {
             "loss": loss,
         }

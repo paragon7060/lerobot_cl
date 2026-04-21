@@ -1,0 +1,52 @@
+WARNING:lerobot.configs.policies:Device 'None' is not available. Switching to 'cuda'.
+wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from /home/seonho/.netrc.
+wandb: Currently logged in as: junhyeong to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: setting up run v8w61f35
+wandb: Tracking run with wandb version 0.24.2
+wandb: Run data is saved locally in /home/seonho/groot_robocasa/outputs/target/wandb/run-20260420_154514-v8w61f35
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run robocasa_groot_target
+wandb: ⭐️ View project at https://wandb.ai/RwHlabs/groot_robocasa
+wandb: 🚀 View run at https://wandb.ai/RwHlabs/groot_robocasa/runs/v8w61f35
+[GROOT] Flash Attention version: 2.8.3
+Loading pretrained dual brain from nvidia/GR00T-N1.5-3B
+Tune backbone vision tower: False
+Tune backbone LLM: False
+Tune action head projector: True
+Tune action head DiT: True
+Fetching 13 files:   0%|          | 0/13 [00:00<?, ?it/s]Fetching 13 files: 100%|██████████| 13/13 [00:00<00:00, 45514.15it/s]
+`torch_dtype` is deprecated! Use `dtype` instead!
+[GROOT] Copying vendor Eagle files to cache: /home/seonho/clvla/lerobot_cl/src/lerobot/policies/groot/eagle2_hg_model -> /home/seonho/.cache/huggingface/lerobot/lerobot/eagle2hg-processor-groot-n1p5
+[GROOT] Assets repo: lerobot/eagle2hg-processor-groot-n1p5 
+ Cache dir: /home/seonho/.cache/huggingface/lerobot/lerobot/eagle2hg-processor-groot-n1p5
+Tune backbone llm: False
+Tune backbone visual: True
+Total number of DiT parameters:  550386688
+Total number of SelfAttentionTransformer parameters:  201433088
+Tune action head projector: True
+Tune action head diffusion model: True
+Tune backbone llm: False
+Tune backbone visual: False
+Warning: No backbone trainable parameters found.
+Tune action head projector: True
+Tune action head diffusion model: True
+/home/seonho/miniconda3/envs/minje/lib/python3.12/site-packages/torchvision/io/_video_deprecation_warning.py:5: UserWarning: The video decoding and encoding capabilities of torchvision are deprecated from version 0.22 and will be removed in version 0.24. We recommend that you migrate to TorchCodec, where we'll consolidate the future decoding/encoding capabilities of PyTorch: https://github.com/pytorch/torchcodec
+  warnings.warn(
+/home/seonho/miniconda3/envs/minje/lib/python3.12/site-packages/torchvision/io/_video_deprecation_warning.py:5: UserWarning: The video decoding and encoding capabilities of torchvision are deprecated from version 0.22 and will be removed in version 0.24. We recommend that you migrate to TorchCodec, where we'll consolidate the future decoding/encoding capabilities of PyTorch: https://github.com/pytorch/torchcodec
+  warnings.warn(
+/home/seonho/miniconda3/envs/minje/lib/python3.12/site-packages/torchvision/io/_video_deprecation_warning.py:5: UserWarning: The video decoding and encoding capabilities of torchvision are deprecated from version 0.22 and will be removed in version 0.24. We recommend that you migrate to TorchCodec, where we'll consolidate the future decoding/encoding capabilities of PyTorch: https://github.com/pytorch/torchcodec
+  warnings.warn(
+/home/seonho/miniconda3/envs/minje/lib/python3.12/site-packages/torchvision/io/_video_deprecation_warning.py:5: UserWarning: The video decoding and encoding capabilities of torchvision are deprecated from version 0.22 and will be removed in version 0.24. We recommend that you migrate to TorchCodec, where we'll consolidate the future decoding/encoding capabilities of PyTorch: https://github.com/pytorch/torchcodec
+  warnings.warn(
+/home/seonho/miniconda3/envs/minje/lib/python3.12/site-packages/torchvision/io/_video_deprecation_warning.py:5: UserWarning: The video decoding and encoding capabilities of torchvision are deprecated from version 0.22 and will be removed in version 0.24. We recommend that you migrate to TorchCodec, where we'll consolidate the future decoding/encoding capabilities of PyTorch: https://github.com/pytorch/torchcodec
+  warnings.warn(
+/home/seonho/miniconda3/envs/minje/lib/python3.12/site-packages/torchvision/io/_video_deprecation_warning.py:5: UserWarning: The video decoding and encoding capabilities of torchvision are deprecated from version 0.22 and will be removed in version 0.24. We recommend that you migrate to TorchCodec, where we'll consolidate the future decoding/encoding capabilities of PyTorch: https://github.com/pytorch/torchcodec
+  warnings.warn(
+/home/seonho/miniconda3/envs/minje/lib/python3.12/site-packages/torchvision/io/_video_deprecation_warning.py:5: UserWarning: The video decoding and encoding capabilities of torchvision are deprecated from version 0.22 and will be removed in version 0.24. We recommend that you migrate to TorchCodec, where we'll consolidate the future decoding/encoding capabilities of PyTorch: https://github.com/pytorch/torchcodec
+  warnings.warn(
+/home/seonho/miniconda3/envs/minje/lib/python3.12/site-packages/torchvision/io/_video_deprecation_warning.py:5: UserWarning: The video decoding and encoding capabilities of torchvision are deprecated from version 0.22 and will be removed in version 0.24. We recommend that you migrate to TorchCodec, where we'll consolidate the future decoding/encoding capabilities of PyTorch: https://github.com/pytorch/torchcodec
+  warnings.warn(
+`use_fast` is set to `True` but the image processor class does not have a fast version.  Falling back to the slow version.
+The tokenizer you are loading from '/home/seonho/.cache/huggingface/lerobot/lerobot/eagle2hg-processor-groot-n1p5' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
+The tokenizer you are loading from '/home/seonho/.cache/huggingface/lerobot/lerobot/eagle2hg-processor-groot-n1p5' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
+wandb: Adding directory to artifact (/home/seonho/groot_robocasa/outputs/target/checkpoints/030000)... Done. 40.7s

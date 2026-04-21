@@ -23,3 +23,21 @@ CUDA_VISIBLE_DEVICES=0,1 accelerate launch \
     --wandb.entity=RwHlabs \
     --wandb.disable_artifact=true \
     2>&1 | tee outputs/cl_log.txt
+
+# Robocasa
+## GR00T Baseline
+CUDA_VISIBLE_DEVICES=1 lerobot-train \
+  --policy.type=groot \
+  --dataset.repo_id=Whalswp/robocasa_merged_pretrain \
+  --output_dir=./outputs/robocasa_pretrain \
+  --job_name=robocasa_groot_pretrain \
+  --steps=80000 \
+  --save_checkpoint=true \
+  --save_freq=40000 \
+  --batch_size=64 \
+  --policy.push_to_hub=true \
+  --policy.repo_id=paragon7060/robocasa_groot_pretrain \
+  --wandb.enable=true \
+  --wandb.project=groot_robocasa \
+  --wandb.entity=RwHlabs \
+  2>&1 | tee outputs/baseline_log.txt

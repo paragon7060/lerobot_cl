@@ -156,6 +156,79 @@ def decode_video_frames(
         raise ValueError(f"Unsupported video backend: {backend}")
 
 
+def decode_video_frames_pyav(
+    video_path: Path | str,
+    timestamps: list[float],
+    tolerance_s: float,
+) -> torch.Tensor:
+    """Decode video frames using PyAV directly (without torchvision).
+
+    More robust than the torchvision path for edge-case codecs or seek issues.
+    """
+    import av
+
+    video_path = str(video_path)
+    query_ts = torch.tensor(timestamps)
+
+    container = av.open(video_path)
+    stream = container.streams.video[0]
+
+    first_ts = min(timestamps)
+    last_ts = max(timestamps)
+
+    # seek to the nearest keyframe before first_ts
+    # container.seek offset is in AV_TIME_BASE units (microseconds = 1/1,000,000 s)
+    seek_us = int(first_ts * 1_000_000)
+    container.seek(seek_us, backward=True, any_frame=False)
+    # NOTE: do NOT call flush_buffers() here — it clears the active SPS/PPS parameter sets
+    # that were initialized from the container's extradata (avcC box). Without them, the H264
+    # decoder cannot decode keyframes that lack inline SPS/PPS NAL units, which is common in
+    # long concatenated MP4 files.
+
+    loaded_frames = []
+    loaded_ts = []
+
+    for packet in container.demux(stream):
+        try:
+            for frame in packet.decode():
+                if frame.pts is None:
+                    continue
+                ts = float(frame.pts * stream.time_base)
+                if ts < first_ts - tolerance_s:
+                    continue
+                img = torch.from_numpy(frame.to_ndarray(format="rgb24")).permute(2, 0, 1)
+                loaded_frames.append(img)
+                loaded_ts.append(ts)
+                if ts >= last_ts:
+                    break
+        except av.error.InvalidDataError:
+            continue
+        if loaded_ts and loaded_ts[-1] >= last_ts:
+            break
+
+    container.close()
+
+    if not loaded_frames:
+        raise RuntimeError(f"No frames decoded from {video_path} for timestamps {timestamps}")
+
+    loaded_ts_t = torch.tensor(loaded_ts)
+    dist = torch.cdist(query_ts[:, None], loaded_ts_t[:, None], p=1)
+    min_, argmin_ = dist.min(1)
+
+    is_within_tol = min_ < tolerance_s
+    if not is_within_tol.all():
+        raise FrameTimestampError(
+            f"One or several query timestamps unexpectedly violate the tolerance ({min_[~is_within_tol]} > {tolerance_s=})."
+            f"\nqueried timestamps: {query_ts}"
+            f"\nloaded timestamps: {loaded_ts_t}"
+            f"\nvideo: {video_path}"
+            f"\nbackend: pyav"
+        )
+
+    closest_frames = torch.stack([loaded_frames[idx] for idx in argmin_])
+    return closest_frames
+
+
 def decode_video_frames_torchvision(
     video_path: Path | str,
     timestamps: list[float],

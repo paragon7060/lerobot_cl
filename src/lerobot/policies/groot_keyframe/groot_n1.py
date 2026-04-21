@@ -372,7 +372,7 @@ class GR00TN15(PreTrainedModel):
 
         from safetensors.torch import load_file as safetensors_load
 
-        config = GR00TN15Config.from_pretrained(local_model_path, local_files_only=True)
+        config = GR00TN15Config.from_pretrained(local_model_path)
         pretrained_model = cls(config, local_model_path=local_model_path)
 
         safetensors_files = sorted(glob.glob(os.path.join(local_model_path, "*.safetensors")))

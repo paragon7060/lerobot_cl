@@ -286,17 +286,12 @@ def get_safe_version(repo_id: str, version: str | packaging.version.Version) -> 
     hub_versions = get_repo_versions(repo_id)
 
     if not hub_versions:
-        raise RevisionNotFoundError(
-            f"""Your dataset must be tagged with a codebase version.
-            Assuming _version_ is the codebase_version value in the info.json, you can run this:
-            ```python
-            from huggingface_hub import HfApi
-
-            hub_api = HfApi()
-            hub_api.create_tag("{repo_id}", tag="_version_", repo_type="dataset")
-            ```
-            """
+        logging.warning(
+            f"Dataset '{repo_id}' has no version tags on the Hub. Falling back to 'main' revision. "
+            f"To pin a version, run: "
+            f"HfApi().create_tag('{repo_id}', tag='{target_version}', repo_type='dataset')"
         )
+        return "main"
 
     if target_version in hub_versions:
         return f"v{target_version}"
