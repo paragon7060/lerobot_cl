@@ -1,0 +1,23 @@
+{
+    "_description": "Dataset config template for GR00T-CL v2 training",
+
+    "cameras": [
+        "observation.images.CAMERA_NAME_1",
+        "observation.images.CAMERA_NAME_2"
+    ],
+
+    "task_prompts": {
+        "TASK_NAME_OR_SCENE_ID": "Natural language task instruction.",
+        "ANOTHER_TASK": "Another task instruction."
+    },
+
+    "_notes": [
+        "cameras: list of observation.images.* keys to keep. Others are filtered out.",
+        "If cameras is empty [], all cameras from the dataset are used.",
+        "",
+        "task_prompts: maps task name to text instruction.",
+        "  - Standard LeRobot format: tasks.parquet has 'task' column → auto-read, no need to set here.",
+        "  - Non-standard format (e.g. INSIGHTfixposV3): scene_name index, task_index column → set here.",
+        "If task_prompts is empty {}, defaults to 'Perform the task.' for all tasks."
+    ]
+}

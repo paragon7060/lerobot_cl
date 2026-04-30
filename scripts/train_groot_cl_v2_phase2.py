@@ -1,33 +1,40 @@
 #!/usr/bin/env python
-"""GR00T-CL v2 Phase 1 학습 스크립트.
+"""GR00T-CL v2 Phase 2 학습 스크립트 — Relational Knowledge Distillation (RKD).
 
-VLM backbone + vision tower를 완전히 freeze하고,
-action expert (MultiEmbodimentActionEncoder + DiT)만 flow matching loss로 학습.
-joint_fm_weights로 특정 joint에 가중치를 부여할 수 있다 (기본: index 6 wrist ×5).
+Action Encoder (Teacher, frozen)의 pairwise 관계 구조를 VLM (Student)이 따라가도록 finetuning.
+Occlusion으로 인해 같은 시각 상태에서 다른 방향(joint 7 좌/우)이 나오는 ambiguity를 해결.
+
+RKD Loss (CVPR 2019):
+  z_a = L2_norm( pool( ActionEncoder(action, t=999) ) )   ← Teacher (frozen)
+  z_v = VLMProjector( pool( VLMBackbone(obs) ) )          ← Student (trainable)
+  S_a = z_a @ z_a.T,  P_a = softmax(S_a / τ_act)
+  S_v = z_v @ z_v.T
+  L_RKD = KL( P_a ‖ softmax(S_v / τ_vlm) )
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-빠른 시작:
+빠른 시작 (Phase 1 완료 후):
 
-  python scripts/train_groot_cl_v2_phase1.py \\
+  python scripts/train_groot_cl_v2_phase2.py \\
       --dataset.repo_id=paragon7060/INSIGHTfixposV3 \\
       --dataset.root=/path/to/data \\
       --dataset.video_backend=pyav \\
       --policy.type=groot_cl_v2 \\
+      --policy.groot_pretrained_path=./outputs/groot_cl_v2_phase1/checkpoints/050000 \\
       --dataset_config=scripts/dataset_configs/INSIGHTfixposV3.json \\
-      --output_dir=./outputs/groot_cl_v2_phase1 \\
-      --job_name=groot_cl_v2_phase1 \\
-      --phase1_steps=50000 \\
+      --output_dir=./outputs/groot_cl_v2_phase2 \\
+      --job_name=groot_cl_v2_phase2_rkd \\
+      --phase2_steps=10000 \\
+      --batch_size=32 \\
       --wandb.enable=true \\
       --wandb.project=groot_cl_v2 \\
       --wandb.entity=YOUR_ENTITY
 
-Multi-GPU:
-  accelerate launch --num_processes 2 scripts/train_groot_cl_v2_phase1.py [same args]
-
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Dataset Config (--dataset_config):
-  JSON 파일로 카메라 필터와 task prompt를 지정.
-  scripts/dataset_configs/template.json 참고.
+RKD 하이퍼파라미터 (policy config):
+  --policy.cl_v2_action_temp=0.1   # Teacher 분포 sharpness (↓ = harder positive)
+  --policy.cl_v2_vlm_temp=0.07     # Student logit temperature
+  --policy.cl_v2_loss_weight=0.1   # RKD loss weight
+  --policy.cl_v2_fm_loss_weight=0.01  # FM loss weight (quality 유지용)
 """
 
 import json
@@ -71,15 +78,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# ── Dataset Config Helpers ──────────────────────────────────────────────────────
+# ── Dataset Config Helpers (phase1과 동일) ────────────────────────────────────
 
 def load_dataset_config(path: str | None) -> dict:
-    """dataset_config JSON 파일 로드. 없으면 빈 dict 반환."""
     if path is None:
         return {}
     with open(path) as f:
         cfg = json.load(f)
-    # _로 시작하는 메타 키 제거
     return {k: v for k, v in cfg.items() if not k.startswith("_")}
 
 
@@ -87,28 +92,12 @@ def build_task_index_to_prompt(
     dataset_root: str | Path,
     task_prompts: dict[str, str],
 ) -> dict[int, str]:
-    """tasks.parquet 읽어서 task_index(int) → prompt text 매핑 생성.
-
-    두 가지 tasks.parquet 형식을 지원:
-    1. 표준 LeRobot 형식: int index + 'task' column (task text 직접 포함)
-    2. 비표준 형식 (INSIGHTfixposV3 등): scene_name index + 'task_index' column
-       → task_prompts dict에서 매핑
-
-    Args:
-        dataset_root: 데이터셋 루트 경로 (meta/tasks.parquet 포함)
-        task_prompts: {scene_name: prompt_text} 매핑 (비표준 형식용)
-
-    Returns:
-        {task_index_int: prompt_text}
-    """
     parquet_path = Path(dataset_root) / "meta" / "tasks.parquet"
     if not parquet_path.exists():
-        logger.warning("tasks.parquet not found at %s. Using default prompt.", parquet_path)
         return {}
 
     df = pd.read_parquet(parquet_path)
 
-    # 표준 LeRobot 형식: 'task' column에 실제 텍스트가 있음
     if "task" in df.columns:
         mapping = {}
         for idx, row in df.iterrows():
@@ -116,7 +105,6 @@ def build_task_index_to_prompt(
             mapping[task_idx] = str(row["task"])
         return mapping
 
-    # 비표준 형식: scene_name이 index, task_index가 column
     if "task_index" in df.columns:
         mapping = {}
         for scene_name, row in df.iterrows():
@@ -125,14 +113,13 @@ def build_task_index_to_prompt(
             mapping[idx] = prompt
         return mapping
 
-    logger.warning("tasks.parquet 형식을 인식할 수 없습니다. Default prompt 사용.")
     return {}
 
 
 # ── Training Config ────────────────────────────────────────────────────────────
 
 @dataclass
-class GrootCLv2Phase1Config(TrainPipelineConfig):
+class GrootCLv2Phase2Config(TrainPipelineConfig):
     dataset: DatasetConfig = field(
         default_factory=lambda: DatasetConfig(
             repo_id="",
@@ -143,34 +130,32 @@ class GrootCLv2Phase1Config(TrainPipelineConfig):
     policy: PreTrainedConfig | None = None
 
     # 학습 하이퍼파라미터
-    phase1_steps: int = 50_000
-    batch_size: int = 4
+    phase2_steps: int = 10_000
+    batch_size: int = 32
     num_workers: int = 4
     log_freq: int = 50
     seed: int = 42
     use_policy_training_preset: bool = False
-    lr: float = 1e-4
-    warmup_steps: int = 0
+    lr: float = 2e-5
+    warmup_steps: int = 500
 
-    # Dataset 설정: 카메라 필터 + task prompt
-    # scripts/dataset_configs/*.json 파일 경로를 지정.
-    # 지정하지 않으면 모든 카메라 사용, task prompt = "Perform the task."
+    # Dataset 설정
     dataset_config: str | None = None
 
     def validate(self) -> None:
         if self.policy is None:
             raise ValueError("policy must be set")
         if not self.job_name:
-            self.job_name = "groot_cl_v2_phase1"
+            self.job_name = "groot_cl_v2_phase2"
         if not self.output_dir:
-            self.output_dir = Path("outputs/groot_cl_v2_phase1")
-        self.steps = self.phase1_steps
+            self.output_dir = Path("outputs/groot_cl_v2_phase2")
+        self.steps = self.phase2_steps
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 @parser.wrap()
-def main(cfg: GrootCLv2Phase1Config) -> None:
+def main(cfg: GrootCLv2Phase2Config) -> None:
     ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
     accelerator = Accelerator(
         mixed_precision="no",
@@ -191,11 +176,11 @@ def main(cfg: GrootCLv2Phase1Config) -> None:
 
     # ── Dataset config 로드 ────────────────────────────────────────────────────
     ds_cfg = load_dataset_config(cfg.dataset_config)
-    keep_cameras: set[str] = set(ds_cfg.get("cameras", []))  # empty = keep all
+    keep_cameras: set[str] = set(ds_cfg.get("cameras", []))
     task_prompts: dict[str, str] = ds_cfg.get("task_prompts", {})
 
     if accelerator.is_main_process:
-        logger.info("Dataset config: %s", cfg.dataset_config or "(none — using all cameras)")
+        logger.info("Dataset config: %s", cfg.dataset_config or "(none)")
         logger.info("Keep cameras: %s", sorted(keep_cameras) if keep_cameras else "ALL")
 
     # ── WandB ──────────────────────────────────────────────────────────────────
@@ -213,13 +198,16 @@ def main(cfg: GrootCLv2Phase1Config) -> None:
                 "repo_id": cfg.dataset.repo_id,
                 "base_model_path": cfg.policy.base_model_path,
                 "groot_pretrained_path": getattr(cfg.policy, "groot_pretrained_path", None),
-                "phase1_steps": cfg.phase1_steps,
+                "phase2_steps": cfg.phase2_steps,
                 "lr": cfg.lr,
                 "warmup_steps": cfg.warmup_steps,
                 "batch_size": cfg.batch_size,
                 "num_processes": accelerator.num_processes,
                 "effective_batch_size": cfg.batch_size * accelerator.num_processes,
-                "joint_fm_weights": cfg.policy.joint_fm_weights,
+                "cl_v2_action_temp": cfg.policy.cl_v2_action_temp,
+                "cl_v2_vlm_temp": cfg.policy.cl_v2_vlm_temp,
+                "cl_v2_loss_weight": cfg.policy.cl_v2_loss_weight,
+                "cl_v2_fm_loss_weight": cfg.policy.cl_v2_fm_loss_weight,
                 "keep_cameras": sorted(keep_cameras) if keep_cameras else "ALL",
                 "seed": cfg.seed,
             },
@@ -227,8 +215,8 @@ def main(cfg: GrootCLv2Phase1Config) -> None:
         )
         logger.info("WandB: project=%s, run=%s", cfg.wandb.project, wandb.run.name)
 
-    # Force phase1
-    cfg.policy.cl_v2_phase = "phase1"
+    # Force phase2
+    cfg.policy.cl_v2_phase = "phase2"
 
     # ── Dataset 로드 ───────────────────────────────────────────────────────────
     ds_meta = LeRobotDatasetMetadata(repo_id=cfg.dataset.repo_id, root=cfg.dataset.root)
@@ -286,17 +274,21 @@ def main(cfg: GrootCLv2Phase1Config) -> None:
             "Trainable params: %s / %s (%.2f%%)",
             f"{num_learnable:,}", f"{num_total:,}", 100 * num_learnable / max(num_total, 1),
         )
-        logger.info("Joint FM weights: %s", raw_policy._joint_weights.cpu().tolist())
+        logger.info(
+            "RKD τ_act=%.3f, τ_vlm=%.3f, λ_rkd=%.3f, λ_fm=%.4f",
+            cfg.policy.cl_v2_action_temp,
+            cfg.policy.cl_v2_vlm_temp,
+            cfg.policy.cl_v2_loss_weight,
+            cfg.policy.cl_v2_fm_loss_weight,
+        )
 
     # ── Preprocess 함수 ────────────────────────────────────────────────────────
     def preprocess(raw_batch: dict) -> dict:
-        # 1. 카메라 필터 (dataset_config에 cameras 지정된 경우)
         if keep_cameras:
             for key in list(raw_batch.keys()):
                 if key.startswith("observation.images.") and key not in keep_cameras:
                     del raw_batch[key]
 
-        # 2. task_index → prompt 텍스트 주입
         if task_index_to_prompt and "task_index" in raw_batch:
             indices = raw_batch["task_index"]
             if isinstance(indices, torch.Tensor):
@@ -323,7 +315,7 @@ def main(cfg: GrootCLv2Phase1Config) -> None:
     scheduler = get_cosine_schedule_with_warmup(
         optimizer,
         num_warmup_steps=cfg.warmup_steps,
-        num_training_steps=cfg.phase1_steps,
+        num_training_steps=cfg.phase2_steps,
     )
     optimizer, scheduler = accelerator.prepare(optimizer, scheduler)
 
@@ -331,7 +323,7 @@ def main(cfg: GrootCLv2Phase1Config) -> None:
     policy.train()
     data_stream = infinite_dataloader()
 
-    for step in range(1, cfg.phase1_steps + 1):
+    for step in range(1, cfg.phase2_steps + 1):
         raw_batch = next(data_stream)
         batch = preprocess(raw_batch)
 
@@ -345,30 +337,33 @@ def main(cfg: GrootCLv2Phase1Config) -> None:
 
         if accelerator.is_main_process and step % cfg.log_freq == 0:
             lr_now = scheduler.get_last_lr()[0]
+            rkd = loss_dict.get("rkd_loss", 0.0)
+            fm = loss_dict.get("flow_matching_loss", 0.0)
             msg = (
-                f"[phase1] step={step}/{cfg.phase1_steps} | lr={lr_now:.2e} | "
+                f"[phase2] step={step}/{cfg.phase2_steps} | lr={lr_now:.2e} | "
                 f"grad_norm={grad_norm.item() if isinstance(grad_norm, torch.Tensor) else grad_norm:.3f} | "
-                f"fm_loss={loss_dict.get('flow_matching_loss', loss.item()):.4f}"
+                f"rkd={rkd:.4f} | fm={fm:.4f} | total={loss_dict['loss']:.4f}"
             )
             print(msg, flush=True)
             logger.info(msg)
             if use_wandb:
                 wandb.log(
                     {
-                        "phase1/loss": loss_dict.get("flow_matching_loss", loss.item()),
-                        "phase1/lr": lr_now,
-                        "phase1/grad_norm": (
+                        "phase2/loss": loss_dict["loss"],
+                        "phase2/rkd_loss": rkd,
+                        "phase2/fm_loss": fm,
+                        "phase2/lr": lr_now,
+                        "phase2/grad_norm": (
                             grad_norm.item() if isinstance(grad_norm, torch.Tensor) else float(grad_norm)
                         ),
                     },
                     step=step,
                 )
 
-        # 마지막 step에만 체크포인트 저장 (디스크 절약)
-        if step == cfg.phase1_steps:
+        if step == cfg.phase2_steps:
             accelerator.wait_for_everyone()
             if accelerator.is_main_process:
-                checkpoint_dir = get_step_checkpoint_dir(cfg.output_dir, cfg.phase1_steps, step)
+                checkpoint_dir = get_step_checkpoint_dir(cfg.output_dir, cfg.phase2_steps, step)
                 save_checkpoint(
                     checkpoint_dir=checkpoint_dir,
                     step=step,
@@ -383,8 +378,7 @@ def main(cfg: GrootCLv2Phase1Config) -> None:
                 logger.info("체크포인트 저장: %s", checkpoint_dir)
 
     if accelerator.is_main_process:
-        logger.info("Phase 1 완료. 체크포인트: %s", cfg.output_dir)
-        logger.info("다음: train_groot_cl_v2_phase2.py 로 Phase 2 RKD 학습 진행.")
+        logger.info("Phase 2 완료. 체크포인트: %s", cfg.output_dir)
 
     if use_wandb:
         wandb.finish()

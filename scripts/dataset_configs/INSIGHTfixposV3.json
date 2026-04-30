@@ -1,0 +1,26 @@
+{
+    "_description": "Dataset config for paragon7060/INSIGHTfixposV3",
+    "_tasks_parquet_format": "non-standard: scene_name as index, task_index column",
+
+    "cameras": [
+        "observation.images.wrist",
+        "observation.images.guide",
+        "observation.images.right_shoulder"
+    ],
+
+    "task_prompts": {
+        "1ext": "Open the cabinet following the guide.",
+        "3a":   "Open the door following the guide.",
+        "3b":   "Open the door following the guide.",
+        "3c":   "Open the door following the guide.",
+        "3d":   "Open the door following the guide.",
+        "5a":   "Open the bottle following the guide.",
+        "5b":   "Open the bottle following the guide.",
+        "5c":   "Open the bottle following the guide.",
+        "5d":   "Close the bottle following the guide.",
+        "5e":   "Close the bottle following the guide.",
+        "5f":   "Close the bottle following the guide.",
+        "5g":   "Open the bottle following the guide.",
+        "5h":   "Close the bottle cap following the guide."
+    }
+}
