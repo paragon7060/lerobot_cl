@@ -50,3 +50,38 @@ Tune action head diffusion model: True
 The tokenizer you are loading from '/home/seonho/.cache/huggingface/lerobot/lerobot/eagle2hg-processor-groot-n1p5' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
 The tokenizer you are loading from '/home/seonho/.cache/huggingface/lerobot/lerobot/eagle2hg-processor-groot-n1p5' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
 wandb: Adding directory to artifact (/home/seonho/groot_robocasa/outputs/target/checkpoints/030000)... Done. 40.7s
+wandb: Adding directory to artifact (/home/seonho/groot_robocasa/outputs/target/checkpoints/060000)... Done. 38.5s
+E0422 15:38:55.320000 2900422 site-packages/torch/distributed/elastic/multiprocessing/api.py:874] failed (exitcode: -9) local_rank: 0 (pid: 2900793) of binary: /home/seonho/miniconda3/envs/minje/bin/python3.12
+Traceback (most recent call last):
+  File "/home/seonho/miniconda3/envs/minje/bin/accelerate", line 6, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/seonho/miniconda3/envs/minje/lib/python3.12/site-packages/accelerate/commands/accelerate_cli.py", line 50, in main
+    args.func(args)
+  File "/home/seonho/miniconda3/envs/minje/lib/python3.12/site-packages/accelerate/commands/launch.py", line 1396, in launch_command
+    multi_gpu_launcher(args)
+  File "/home/seonho/miniconda3/envs/minje/lib/python3.12/site-packages/accelerate/commands/launch.py", line 1023, in multi_gpu_launcher
+    distrib_run.run(args)
+  File "/home/seonho/miniconda3/envs/minje/lib/python3.12/site-packages/torch/distributed/run.py", line 883, in run
+    elastic_launch(
+  File "/home/seonho/miniconda3/envs/minje/lib/python3.12/site-packages/torch/distributed/launcher/api.py", line 139, in __call__
+    return launch_agent(self._config, self._entrypoint, list(args))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/seonho/miniconda3/envs/minje/lib/python3.12/site-packages/torch/distributed/launcher/api.py", line 270, in launch_agent
+    raise ChildFailedError(
+torch.distributed.elastic.multiprocessing.errors.ChildFailedError: 
+========================================================
+scripts/train_groot_robocasa.py FAILED
+--------------------------------------------------------
+Failures:
+  <NO_OTHER_FAILURES>
+--------------------------------------------------------
+Root Cause (first observed failure):
+[0]:
+  time      : 2026-04-22_15:38:55
+  host      : worker1
+  rank      : 0 (local_rank: 0)
+  exitcode  : -9 (pid: 2900793)
+  error_file: <N/A>
+  traceback : Signal 9 (SIGKILL) received by PID 2900793
+========================================================

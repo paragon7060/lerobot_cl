@@ -327,6 +327,8 @@ def main(cfg: GrootCLv2Phase1Config) -> None:
                     policy=accelerator.unwrap_model(policy),
                     optimizer=optimizer,
                     scheduler=scheduler,
+                    preprocessor=pre,
+                    postprocessor=None,
                 )
                 update_last_checkpoint(checkpoint_dir)
                 logger.info("체크포인트 저장: %s", checkpoint_dir)

@@ -31,6 +31,7 @@ keyframe 시점 전후 동작을 검증한다. 추가로:
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -374,9 +375,12 @@ def main() -> None:
     kf_entry = ep_entries_cropped[0]
     kf_frame_index: int = kf_entry["frame_index"]
     kf_file_path: str = _remap_file_path(kf_entry["file_path"], registry_path)
+    m = re.search(r"task_(\w+)[/\\]", kf_entry["file_path"])
+    task_id = m.group(1) if m else ""
+    pre_kf_cam = "right_shoulder" if task_id.startswith("3") else "wrist"
     print(
         f"에피소드 {episode_id} | keyframe: frame={kf_frame_index}, "
-        f"camera={kf_entry['camera_view']}, file={kf_file_path}"
+        f"pre_kf_cam={pre_kf_cam}, file={kf_file_path}"
     )
 
     # ------------------------------------------------------------------
@@ -449,7 +453,7 @@ def main() -> None:
 
         is_keyframe_frame = frame_index == kf_frame_index
         if frame_index < kf_frame_index:
-            kf_slot_pil = wrist_pil.copy()
+            kf_slot_pil = (rightshoulder_pil if pre_kf_cam == "right_shoulder" else wrist_pil).copy()
         else:
             if kf_pil_cached is None:
                 raw = Image.open(kf_file_path).convert("RGB")

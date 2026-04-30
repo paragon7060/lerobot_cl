@@ -67,6 +67,8 @@ class EvalConfig:
     batch_size: int = 50
     # `use_async_envs` specifies whether to use asynchronous environments (multiprocessing).
     use_async_envs: bool = False
+    # `max_episodes_rendered` controls how many eval episodes are rendered to videos.
+    max_episodes_rendered: int = 10
 
     def __post_init__(self) -> None:
         if self.batch_size > self.n_episodes:
@@ -77,6 +79,10 @@ class EvalConfig:
                 "This might significantly slow down evaluation. To fix this, you should update your command "
                 f"to increase the number of episodes to match the batch size (e.g. `eval.n_episodes={self.batch_size}`), "
                 f"or lower the batch size (e.g. `eval.batch_size={self.n_episodes}`)."
+            )
+        if self.max_episodes_rendered < 0:
+            raise ValueError(
+                f"`max_episodes_rendered` must be non-negative, got {self.max_episodes_rendered}."
             )
 
 

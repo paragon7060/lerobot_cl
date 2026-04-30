@@ -55,6 +55,7 @@ Task description 모드:
 import json
 import logging
 import random
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -136,9 +137,13 @@ def load_keyframe_registry(registry_path: Path) -> dict:
     keyframe_dict = {}
     for entry in entries:
         if entry["cropped"] and entry["episode_id"] not in keyframe_dict:
+            m = re.search(r"task_(\w+)[/\\]", entry["file_path"])
+            task_id = m.group(1) if m else ""
+            source_cam = "right_shoulder" if task_id.startswith("3") else "wrist"
             keyframe_dict[entry["episode_id"]] = {
                 "frame_index": entry["frame_index"],
                 "file_path": _remap_file_path(entry["file_path"], registry_path),
+                "source_cam": source_cam,
             }
     return keyframe_dict
 
@@ -263,8 +268,9 @@ def inject_keyframe_and_task(
         kf = keyframe_dict.get(ep_id)
 
         if kf is None or fr_idx < kf["frame_index"]:
-            # keyframe 이전 또는 registry에 없음 → wrist 복사본
-            kf_imgs.append(wrist_imgs[i].clone())
+            # keyframe 이전: task별 지정 카메라 복사 (door=right_shoulder, others=wrist)
+            src_key = f"observation.images.{kf['source_cam'] if kf else 'wrist'}"
+            kf_imgs.append(raw_batch[src_key][i].clone())
         else:
             # keyframe 이후 → cropped keyframe 이미지 로드
             tensor = _load_keyframe_tensor(kf["file_path"], H, W).to(wrist_imgs.device)

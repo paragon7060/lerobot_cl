@@ -28,7 +28,7 @@ class GrootCLv2Config(GrootConfig):
     # List of floats for the actual action_dim — padding dims are auto-zeroed.
     # paragon7060/INSIGHTfixposV3 기준: 8차원, index 6 (wrist) = 3.0배 강조.
     joint_fm_weights: list = field(
-        default_factory=lambda: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 3.0, 1.0]
+        default_factory=lambda: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 5.0, 1.0]
     )
 
     # Phase 2 projector settings (for future use)
