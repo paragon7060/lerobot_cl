@@ -1,0 +1,13 @@
+{
+    "_description": "Dataset config for robocasa target split (atomic + composite)",
+    "_tasks_parquet_format": "standard: task text as index, task_index column",
+    "_note": "task_prompts 생략 — tasks.parquet의 task text(index)를 자동 사용",
+
+    "cameras": [
+        "observation.images.robot0_agentview_left",
+        "observation.images.robot0_agentview_right",
+        "observation.images.robot0_eye_in_hand"
+    ],
+
+    "task_prompts": {}
+}

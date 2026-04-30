@@ -59,6 +59,7 @@ from lerobot.configs.train import TrainPipelineConfig
 from lerobot.datasets.dataset_metadata import LeRobotDatasetMetadata
 from lerobot.datasets.factory import resolve_delta_timestamps
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.datasets.multi_dataset import MultiLeRobotDataset
 from lerobot.policies.factory import make_policy
 from lerobot.policies.groot_cl_v2.configuration_groot_cl_v2 import GrootCLv2Config
 from lerobot.policies.groot_cl_v2.modeling_groot_cl_v2 import GrootCLv2Policy
@@ -129,6 +130,56 @@ def build_task_index_to_prompt(
     return {}
 
 
+# ── Multi-Dataset Helpers ──────────────────────────────────────────────────────
+
+def get_task_repo_ids(root: Path, top_level_dirs: list[str]) -> list[str]:
+    """root 아래 top-level dir의 task_XXXX 서브디렉토리를 열거.
+
+    Returns:
+        ["robocasa_target_human_atomic/task_0001", ...] — MultiLeRobotDataset repo_ids 형식
+    """
+    repo_ids = []
+    for top_dir in top_level_dirs:
+        top_path = root / top_dir
+        if not top_path.exists():
+            raise FileNotFoundError(f"데이터셋 경로 없음: {top_path}")
+        tasks = sorted(
+            p.name for p in top_path.iterdir()
+            if p.is_dir() and p.name.startswith("task_")
+            and (p / "meta" / "info.json").exists()
+            and (p / "meta" / "episodes").exists()
+        )
+        if not tasks:
+            raise RuntimeError(f"유효한 task 없음: {top_path}")
+        repo_ids.extend(f"{top_dir}/{t}" for t in tasks)
+    return repo_ids
+
+
+def build_dataset_to_task(root: Path, repo_ids: list[str]) -> dict[int, str]:
+    """각 sub-dataset (dataset_index i) → task text 매핑 생성.
+
+    MultiLeRobotDataset은 per-frame에 dataset_index(int)를 붙이므로
+    dataset_index → task text 매핑을 빌드한다.
+    각 task subdir의 tasks.parquet에서 task text를 읽어온다.
+    """
+    mapping = {}
+    for i, repo_id in enumerate(repo_ids):
+        parquet_path = root / repo_id / "meta" / "tasks.parquet"
+        default_text = "Perform the task."
+        if not parquet_path.exists():
+            mapping[i] = default_text
+            continue
+        df = pd.read_parquet(parquet_path)
+        # 표준 LeRobot 형식: task text가 index, task_index 가 column
+        # df.index[0] = task text string
+        if len(df) > 0:
+            task_text = str(df.index[0])
+            mapping[i] = task_text
+        else:
+            mapping[i] = default_text
+    return mapping
+
+
 # ── Training Config ────────────────────────────────────────────────────────────
 
 @dataclass
@@ -154,6 +205,12 @@ class GrootCLv2Phase2Config(TrainPipelineConfig):
 
     # Dataset 설정
     dataset_config: str | None = None
+
+    # Multi-dataset 모드 (robocasa처럼 task_XXXX 서브디렉토리 구조)
+    # dataset.root 아래의 top-level 디렉토리 목록을 지정
+    # 예: ["robocasa_target_human_atomic", "robocasa_target_human_composite"]
+    multi_dataset: bool = False
+    dataset_dirs: list[str] = field(default_factory=list)
 
     def validate(self) -> None:
         if self.policy is None:
@@ -232,27 +289,85 @@ def main(cfg: GrootCLv2Phase2Config) -> None:
     cfg.policy.cl_v2_phase = "phase2"
 
     # ── Dataset 로드 ───────────────────────────────────────────────────────────
-    ds_meta = LeRobotDatasetMetadata(repo_id=cfg.dataset.repo_id, root=cfg.dataset.root)
-    delta_timestamps = resolve_delta_timestamps(cfg.policy, ds_meta)
+    if cfg.multi_dataset:
+        # ── Multi-dataset 모드 (robocasa-style task_XXXX 서브디렉토리) ────────
+        if not cfg.dataset_dirs:
+            raise ValueError("multi_dataset=True 일 때 dataset_dirs 를 반드시 지정하세요.")
+        dataset_root = Path(cfg.dataset.root)
+        repo_ids = get_task_repo_ids(dataset_root, cfg.dataset_dirs)
+        if accelerator.is_main_process:
+            logger.info("Multi-dataset: %d task subdirs", len(repo_ids))
 
-    if accelerator.is_main_process:
-        dataset = LeRobotDataset(
-            repo_id=cfg.dataset.repo_id,
-            root=cfg.dataset.root,
-            delta_timestamps=delta_timestamps,
-            video_backend=cfg.dataset.video_backend,
+        first_ds_meta = LeRobotDatasetMetadata(
+            repo_id=repo_ids[0],
+            root=dataset_root / repo_ids[0],
         )
-    accelerator.wait_for_everyone()
-    if not accelerator.is_main_process:
-        dataset = LeRobotDataset(
-            repo_id=cfg.dataset.repo_id,
-            root=cfg.dataset.root,
-            delta_timestamps=delta_timestamps,
-            video_backend=cfg.dataset.video_backend,
-        )
+        delta_timestamps = resolve_delta_timestamps(cfg.policy, first_ds_meta)
 
-    if accelerator.is_main_process:
-        logger.info("Dataset: %d frames, %d episodes", dataset.num_frames, dataset.num_episodes)
+        if accelerator.is_main_process:
+            dataset = MultiLeRobotDataset(
+                repo_ids=repo_ids,
+                root=dataset_root,
+                delta_timestamps=delta_timestamps,
+                video_backend=cfg.dataset.video_backend,
+            )
+        accelerator.wait_for_everyone()
+        if not accelerator.is_main_process:
+            dataset = MultiLeRobotDataset(
+                repo_ids=repo_ids,
+                root=dataset_root,
+                delta_timestamps=delta_timestamps,
+                video_backend=cfg.dataset.video_backend,
+            )
+
+        if accelerator.is_main_process:
+            logger.info(
+                "MultiLeRobotDataset: %d frames, %d episodes",
+                dataset.num_frames, dataset.num_episodes,
+            )
+
+        # dataset_index → task text 매핑 (각 subdir tasks.parquet에서 읽어옴)
+        dataset_to_task = build_dataset_to_task(dataset_root, repo_ids)
+        task_index_to_prompt = {}  # multi_dataset 모드에서는 사용 안 함
+        if accelerator.is_main_process:
+            logger.info("Dataset-to-task mapping (first 5): %s",
+                        dict(list(dataset_to_task.items())[:5]))
+
+        pre, _ = make_groot_pre_post_processors(cfg.policy, dataset_stats=dataset.stats)
+        ds_meta = first_ds_meta
+
+    else:
+        # ── Single-dataset 모드 ────────────────────────────────────────────────
+        dataset_to_task = {}
+        ds_meta = LeRobotDatasetMetadata(repo_id=cfg.dataset.repo_id, root=cfg.dataset.root)
+        delta_timestamps = resolve_delta_timestamps(cfg.policy, ds_meta)
+
+        if accelerator.is_main_process:
+            dataset = LeRobotDataset(
+                repo_id=cfg.dataset.repo_id,
+                root=cfg.dataset.root,
+                delta_timestamps=delta_timestamps,
+                video_backend=cfg.dataset.video_backend,
+            )
+        accelerator.wait_for_everyone()
+        if not accelerator.is_main_process:
+            dataset = LeRobotDataset(
+                repo_id=cfg.dataset.repo_id,
+                root=cfg.dataset.root,
+                delta_timestamps=delta_timestamps,
+                video_backend=cfg.dataset.video_backend,
+            )
+
+        if accelerator.is_main_process:
+            logger.info("Dataset: %d frames, %d episodes", dataset.num_frames, dataset.num_episodes)
+
+        task_index_to_prompt = {}
+        if cfg.dataset.root is not None:
+            task_index_to_prompt = build_task_index_to_prompt(cfg.dataset.root, task_prompts)
+            if accelerator.is_main_process:
+                logger.info("Task prompts (%d tasks): %s", len(task_index_to_prompt), task_index_to_prompt)
+
+        pre, _ = make_groot_pre_post_processors(cfg.policy, dataset_stats=ds_meta.stats)
 
     dataloader = DataLoader(
         dataset,
@@ -263,15 +378,6 @@ def main(cfg: GrootCLv2Phase2Config) -> None:
         drop_last=True,
         prefetch_factor=2 if cfg.num_workers > 0 else None,
     )
-
-    pre, _ = make_groot_pre_post_processors(cfg.policy, dataset_stats=ds_meta.stats)
-
-    # ── Task prompt 매핑 ───────────────────────────────────────────────────────
-    task_index_to_prompt: dict[int, str] = {}
-    if cfg.dataset.root is not None:
-        task_index_to_prompt = build_task_index_to_prompt(cfg.dataset.root, task_prompts)
-        if accelerator.is_main_process:
-            logger.info("Task prompts (%d tasks): %s", len(task_index_to_prompt), task_index_to_prompt)
 
     # ── Policy 생성 ────────────────────────────────────────────────────────────
     policy: GrootCLv2Policy = make_policy(cfg.policy, ds_meta=ds_meta)
@@ -297,12 +403,23 @@ def main(cfg: GrootCLv2Phase2Config) -> None:
 
     # ── Preprocess 함수 ────────────────────────────────────────────────────────
     def preprocess(raw_batch: dict) -> dict:
+        # 카메라 필터 (single-dataset 모드, keep_cameras 지정된 경우)
         if keep_cameras:
             for key in list(raw_batch.keys()):
                 if key.startswith("observation.images.") and key not in keep_cameras:
                     del raw_batch[key]
 
-        if task_index_to_prompt and "task_index" in raw_batch:
+        if cfg.multi_dataset and dataset_to_task:
+            # Multi-dataset 모드: dataset_index → task text
+            ds_indices = raw_batch["dataset_index"]
+            if isinstance(ds_indices, torch.Tensor):
+                ds_indices = ds_indices.tolist()
+            raw_batch["task"] = [
+                dataset_to_task.get(int(i), "Perform the task.")
+                for i in ds_indices
+            ]
+        elif task_index_to_prompt and "task_index" in raw_batch:
+            # Single-dataset 모드: task_index → task text
             indices = raw_batch["task_index"]
             if isinstance(indices, torch.Tensor):
                 indices = indices.tolist()
