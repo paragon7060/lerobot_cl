@@ -89,14 +89,14 @@ def build_task_index_to_prompt(
 ) -> dict[int, str]:
     """tasks.parquet 읽어서 task_index(int) → prompt text 매핑 생성.
 
-    두 가지 tasks.parquet 형식을 지원:
-    1. 표준 LeRobot 형식: int index + 'task' column (task text 직접 포함)
-    2. 비표준 형식 (INSIGHTfixposV3 등): scene_name index + 'task_index' column
-       → task_prompts dict에서 매핑
+    우선순위:
+    1. task_prompts (dataset_config JSON) 가 있으면 항상 우선 사용
+    2. tasks.parquet의 'task' column (표준 LeRobot 형식) 사용
+    3. tasks.parquet의 'task_index' column만 있으면 default prompt 사용
 
     Args:
         dataset_root: 데이터셋 루트 경로 (meta/tasks.parquet 포함)
-        task_prompts: {scene_name: prompt_text} 매핑 (비표준 형식용)
+        task_prompts: {scene_name: prompt_text} 매핑 — 비어 있으면 parquet fallback
 
     Returns:
         {task_index_int: prompt_text}
@@ -108,7 +108,21 @@ def build_task_index_to_prompt(
 
     df = pd.read_parquet(parquet_path)
 
-    # 표준 LeRobot 형식: 'task' column에 실제 텍스트가 있음
+    # task_index column이 있어야 매핑 가능
+    if "task_index" not in df.columns and not df.index.dtype == "int64":
+        logger.warning("tasks.parquet 형식을 인식할 수 없습니다. Default prompt 사용.")
+        return {}
+
+    # 1순위: JSON task_prompts (항상 override)
+    if task_prompts:
+        mapping = {}
+        for scene_name, row in df.iterrows():
+            idx = int(row["task_index"]) if "task_index" in df.columns else int(scene_name)
+            prompt = task_prompts.get(str(scene_name), "Perform the task.")
+            mapping[idx] = prompt
+        return mapping
+
+    # 2순위: tasks.parquet의 'task' column (표준 LeRobot 형식)
     if "task" in df.columns:
         mapping = {}
         for idx, row in df.iterrows():
@@ -116,16 +130,10 @@ def build_task_index_to_prompt(
             mapping[task_idx] = str(row["task"])
         return mapping
 
-    # 비표준 형식: scene_name이 index, task_index가 column
+    # 3순위: task_index만 있고 task text 없음 → default
     if "task_index" in df.columns:
-        mapping = {}
-        for scene_name, row in df.iterrows():
-            idx = int(row["task_index"])
-            prompt = task_prompts.get(str(scene_name), "Perform the task.")
-            mapping[idx] = prompt
-        return mapping
+        return {int(row["task_index"]): "Perform the task." for _, row in df.iterrows()}
 
-    logger.warning("tasks.parquet 형식을 인식할 수 없습니다. Default prompt 사용.")
     return {}
 
 

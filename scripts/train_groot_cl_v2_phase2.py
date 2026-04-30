@@ -92,12 +92,29 @@ def build_task_index_to_prompt(
     dataset_root: str | Path,
     task_prompts: dict[str, str],
 ) -> dict[int, str]:
+    """tasks.parquet 읽어서 task_index(int) → prompt text 매핑 생성.
+
+    우선순위:
+    1. task_prompts (dataset_config JSON) 가 있으면 항상 우선 사용
+    2. tasks.parquet의 'task' column (표준 LeRobot 형식) 사용
+    3. tasks.parquet의 'task_index' column만 있으면 default prompt 사용
+    """
     parquet_path = Path(dataset_root) / "meta" / "tasks.parquet"
     if not parquet_path.exists():
         return {}
 
     df = pd.read_parquet(parquet_path)
 
+    # 1순위: JSON task_prompts (항상 override)
+    if task_prompts:
+        mapping = {}
+        for scene_name, row in df.iterrows():
+            idx = int(row["task_index"]) if "task_index" in df.columns else int(scene_name)
+            prompt = task_prompts.get(str(scene_name), "Perform the task.")
+            mapping[idx] = prompt
+        return mapping
+
+    # 2순위: tasks.parquet의 'task' column (표준 LeRobot 형식)
     if "task" in df.columns:
         mapping = {}
         for idx, row in df.iterrows():
@@ -105,13 +122,9 @@ def build_task_index_to_prompt(
             mapping[task_idx] = str(row["task"])
         return mapping
 
+    # 3순위: task_index만 있고 task text 없음 → default
     if "task_index" in df.columns:
-        mapping = {}
-        for scene_name, row in df.iterrows():
-            idx = int(row["task_index"])
-            prompt = task_prompts.get(str(scene_name), "Perform the task.")
-            mapping[idx] = prompt
-        return mapping
+        return {int(row["task_index"]): "Perform the task." for _, row in df.iterrows()}
 
     return {}
 
