@@ -16,9 +16,9 @@ logger = logging.getLogger(__name__)
 _GROOT_MODEL_PREFIX = "_groot_model."
 _SAFETENSORS_FILENAME = "model.safetensors"
 
-# GR00TN15 backbone (Eagle2.5-VL) output hidden size.
-# Verified from groot_cl VLMContrastiveHead: vlm_input_dim=1536
-BACKBONE_FEAT_DIM = 1536
+# GR00TN15 backbone (Eagle2.5-VL, Qwen3-2.3B LLM) output hidden size.
+# Confirmed at runtime: backbone_features last dim = 2048
+BACKBONE_FEAT_DIM = 2048
 
 
 class VLMProjector(nn.Module):

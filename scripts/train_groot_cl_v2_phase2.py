@@ -66,7 +66,6 @@ from lerobot.policies.groot_cl_v2.modeling_groot_cl_v2 import GrootCLv2Policy
 from lerobot.policies.groot_cl.processor_groot import make_groot_pre_post_processors
 from lerobot.utils.train_utils import (
     get_step_checkpoint_dir,
-    save_checkpoint,
     update_last_checkpoint,
 )
 
@@ -194,14 +193,18 @@ class GrootCLv2Phase2Config(TrainPipelineConfig):
     policy: PreTrainedConfig | None = None
 
     # 학습 하이퍼파라미터
-    phase2_steps: int = 10_000
+    phase2_steps: int = 100_000
     batch_size: int = 32
     num_workers: int = 4
-    log_freq: int = 50
+    log_freq: int = 100
     seed: int = 42
     use_policy_training_preset: bool = False
     lr: float = 2e-5
-    warmup_steps: int = 500
+    warmup_steps: int = 1000
+
+    # 체크포인트 저장 step 목록 (model.safetensors만 저장, optimizer 제외 → 용량 절약)
+    # 기본: 1만, 3만, 5만, 10만
+    save_steps: list[int] = field(default_factory=lambda: [10_000, 30_000, 50_000, 100_000])
 
     # Dataset 설정
     dataset_config: str | None = None
@@ -450,6 +453,10 @@ def main(cfg: GrootCLv2Phase2Config) -> None:
     optimizer, scheduler = accelerator.prepare(optimizer, scheduler)
 
     # ── Training Loop ──────────────────────────────────────────────────────────
+    save_steps_set = set(cfg.save_steps)
+    if accelerator.is_main_process:
+        logger.info("체크포인트 저장 예정 steps: %s", sorted(save_steps_set))
+
     policy.train()
     data_stream = infinite_dataloader()
 
@@ -490,22 +497,18 @@ def main(cfg: GrootCLv2Phase2Config) -> None:
                     step=step,
                 )
 
-        if step == cfg.phase2_steps:
+        if step in save_steps_set:
             accelerator.wait_for_everyone()
             if accelerator.is_main_process:
                 checkpoint_dir = get_step_checkpoint_dir(cfg.output_dir, cfg.phase2_steps, step)
-                save_checkpoint(
-                    checkpoint_dir=checkpoint_dir,
-                    step=step,
-                    cfg=cfg,
-                    policy=accelerator.unwrap_model(policy),
-                    optimizer=optimizer,
-                    scheduler=scheduler,
-                    preprocessor=pre,
-                    postprocessor=None,
-                )
+                # model weights만 저장 (optimizer 제외 → 디스크 절약)
+                pretrained_dir = checkpoint_dir / "pretrained_model"
+                accelerator.unwrap_model(policy).save_pretrained(pretrained_dir)
+                cfg.save_pretrained(pretrained_dir)
+                if pre is not None:
+                    pre.save_pretrained(pretrained_dir)
                 update_last_checkpoint(checkpoint_dir)
-                logger.info("체크포인트 저장: %s", checkpoint_dir)
+                logger.info("체크포인트 저장 (model only): %s", checkpoint_dir)
 
     if accelerator.is_main_process:
         logger.info("Phase 2 완료. 체크포인트: %s", cfg.output_dir)
