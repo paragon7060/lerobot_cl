@@ -43,9 +43,24 @@ class GrootCLv2Config(GrootConfig):
     cl_v2_action_temp: float = 0.1   # action feature similarity → soft label sharpness
     cl_v2_vlm_temp: float = 0.07     # VLM logit temperature
 
+    # Phase 2 teacher action representation strategy.
+    #
+    # "mean_pool"    : mean( ActionEncoder(action, t=999), dim=T ) → (B, 1536)
+    #                  현재 기본 방식. 단순하지만 temporal ordering 소실.
+    #
+    # "raw_flatten"  : raw action trajectory 직접 flatten → (B, T*action_dim)
+    #                  ActionEncoder를 거치지 않음. Temporal 구조 완전 보존.
+    #                  Wrist joint의 timestep별 회전 방향이 직접 인코딩됨.
+    #                  No extra parameters required.
+    cl_v2_action_repr: str = "mean_pool"  # "mean_pool" | "raw_flatten"
+
     def __post_init__(self):
         super().__post_init__()
         if self.cl_v2_phase not in {"phase1", "phase2"}:
             raise ValueError(
                 f"cl_v2_phase must be 'phase1' or 'phase2', got {self.cl_v2_phase!r}"
+            )
+        if self.cl_v2_action_repr not in {"mean_pool", "raw_flatten"}:
+            raise ValueError(
+                f"cl_v2_action_repr must be 'mean_pool' or 'raw_flatten', got {self.cl_v2_action_repr!r}"
             )

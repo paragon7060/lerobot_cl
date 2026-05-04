@@ -225,6 +225,63 @@ class GrootCLv2Policy(GrootPolicy):
         loss = outputs.get("loss")
         return loss, {"loss": loss.item(), "flow_matching_loss": loss.item()}
 
+    @torch.no_grad()
+    def _compute_action_z(self, action_traj: Tensor, B: int, device: torch.device) -> Tensor:
+        """Teacher action representation → L2-normalized vector.
+
+        두 가지 전략을 config(cl_v2_action_repr)로 선택:
+
+        "mean_pool" (기본):
+            ActionEncoder(action, t=999) → (B, T, D_a) → mean(dim=T) → L2 norm → (B, D_a=1536)
+            - 장점: 학습된 action encoder feature 활용
+            - 단점: per-step MLP 특성상 timestep 간 interaction 없음.
+                    Mean pool로 temporal ordering 소실.
+
+        "raw_flatten":
+            raw action trajectory → flatten → (B, T*action_dim) → L2 norm
+            - 장점: temporal 구조 완전 보존. 추가 파라미터 없음.
+                    Wrist joint의 timestep별 회전 방향이 직접 벡터에 인코딩.
+            - 단점: action_dim 중 불필요한 joint도 동등하게 포함.
+                    Scale 차이가 있을 수 있어 joint별 normalization 고려 필요.
+
+        Args:
+            action_traj: (B, T, action_dim) — raw action trajectory (float32)
+            B: batch size
+            device: target device
+
+        Returns:
+            action_z: (B, D) L2-normalized teacher latent
+        """
+        repr_mode = self.config.cl_v2_action_repr
+
+        if repr_mode == "mean_pool":
+            emb_id = torch.zeros(B, dtype=torch.long, device=device)
+            t_clean = torch.full((B,), 999, dtype=torch.long, device=device)
+            # per-step MLP: (B, T, action_dim) → (B, T, D_a=1536)
+            action_enc_out = self._groot_model.action_head.action_encoder(
+                action_traj, t_clean, emb_id,
+            )
+            # mean pool → temporal ordering 소실, 각 timestep 동등 가중
+            return F.normalize(action_enc_out.mean(dim=1), dim=-1)          # (B, 1536)
+
+        elif repr_mode == "raw_flatten":
+            # ActionEncoder를 거치지 않고 raw trajectory를 직접 flatten.
+            # action_traj: (B, T=16, action_dim=32 or 8 etc.)
+            # → flatten → (B, T*action_dim)
+            # Temporal 순서가 vector 내에 그대로 보존됨.
+            # e.g. wrist rotation 방향 차이:
+            #   left  trajectory: [..., +0.1, +0.2, +0.3, ...]  @ joint 6 positions
+            #   right trajectory: [..., -0.1, -0.2, -0.3, ...]  @ joint 6 positions
+            # → flatten 후 cosine similarity에서 명확히 분리됨.
+            flat = action_traj.flatten(1)                                    # (B, T*action_dim)
+            return F.normalize(flat, dim=-1)                                 # (B, T*action_dim)
+
+        else:
+            raise ValueError(
+                f"Unknown cl_v2_action_repr: {repr_mode!r}. "
+                "Must be 'mean_pool' or 'raw_flatten'."
+            )
+
     def _forward_phase2(self, batch: dict[str, Tensor]) -> tuple[Tensor, dict]:
         """Phase 2: RKD loss — VLM embedding space mirrors action encoder structure.
 
@@ -257,22 +314,10 @@ class GrootCLv2Policy(GrootPolicy):
             backbone_features.float(), backbone_mask
         )  # (B, latent_dim=256), L2 norm'd
 
-        # ── Teacher: ActionEncoder at t=999 (near-clean timestep) ─────────────────
-        # t=999 → t_cont = 0.999 → noisy = 0.001*noise + 0.999*action ≈ clean action
+        # ── Teacher: action representation → L2-normalized latent ────────────────
         with torch.no_grad():
-            emb_id = batch.get(
-                "embodiment_id",
-                torch.zeros(B, dtype=torch.long, device=device),
-            )
-            t_clean = torch.full((B,), 999, dtype=torch.long, device=device)
-            action_enc_out = self._groot_model.action_head.action_encoder(
-                batch["action"].to(device=device, dtype=torch.float32),  # (B, T=16, action_dim)
-                t_clean,
-                emb_id,
-            )  # (B, T=16, D_a=1536)
-
-            # Mean pool over action timesteps → L2 normalize
-            action_z = F.normalize(action_enc_out.mean(dim=1).float(), dim=-1)  # (B, D_a=1536)
+            action_traj = batch["action"].to(device=device, dtype=torch.float32)  # (B, T, action_dim)
+            action_z = self._compute_action_z(action_traj, B, device)
 
             # Teacher similarity matrix → soft target distribution
             S_a = action_z @ action_z.T                                          # (B, B)
