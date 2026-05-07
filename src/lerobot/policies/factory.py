@@ -34,6 +34,7 @@ from lerobot.policies.groot.configuration_groot import GrootConfig
 from lerobot.policies.groot_mgd.configuration_groot import GrootMGDConfig
 from lerobot.policies.groot_cl.configuration_groot_cl import GrootCLConfig
 from lerobot.policies.groot_cl_v2.configuration_groot_cl_v2 import GrootCLv2Config
+from lerobot.policies.groot_robocasa.configuration_groot import GrootRobocasaConfig
 from lerobot.policies.pi0.configuration_pi0 import PI0Config
 from lerobot.policies.pi05.configuration_pi05 import PI05Config
 from lerobot.policies.pretrained import PreTrainedPolicy
@@ -138,6 +139,10 @@ def get_policy_class(name: str) -> type[PreTrainedPolicy]:
         from lerobot.policies.groot_cl_v2.modeling_groot_cl_v2 import GrootCLv2Policy
 
         return GrootCLv2Policy
+    elif name == "groot_robocasa":
+        from lerobot.policies.groot_robocasa.modeling_groot import GrootRobocasaPolicy
+
+        return GrootRobocasaPolicy
     elif name == "xvla":
         from lerobot.policies.xvla.modeling_xvla import XVLAPolicy
 
@@ -198,6 +203,8 @@ def make_policy_config(policy_type: str, **kwargs) -> PreTrainedConfig:
         return GrootCLConfig(**kwargs)
     elif policy_type == "groot_cl_v2":
         return GrootCLv2Config(**kwargs)
+    elif policy_type == "groot_robocasa":
+        return GrootRobocasaConfig(**kwargs)
     elif policy_type == "xvla":
         return XVLAConfig(**kwargs)
     elif policy_type == "wall_x":
@@ -455,6 +462,13 @@ def make_pre_post_processors(
         )
     elif isinstance(policy_cfg, GrootMGDConfig):
         from lerobot.policies.groot.processor_groot import make_groot_pre_post_processors
+
+        processors = make_groot_pre_post_processors(
+            config=policy_cfg,
+            dataset_stats=kwargs.get("dataset_stats"),
+        )
+    elif isinstance(policy_cfg, GrootRobocasaConfig):
+        from lerobot.policies.groot_robocasa.processor_groot import make_groot_pre_post_processors
 
         processors = make_groot_pre_post_processors(
             config=policy_cfg,

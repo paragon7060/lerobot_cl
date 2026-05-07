@@ -41,11 +41,13 @@ from typing import TypeVar
 import torch
 from torch import Tensor
 
-from lerobot.configs.types import FeatureType, PolicyFeature
-from lerobot.policies.groot.configuration_groot import GrootConfig
-from lerobot.policies.groot.groot_n1 import GR00TN15
-from lerobot.policies.pretrained import PreTrainedPolicy
+from lerobot.configs import FeatureType, PolicyFeature
 from lerobot.utils.constants import ACTION, OBS_IMAGES
+from lerobot.utils.import_utils import require_package
+
+from ..pretrained import PreTrainedPolicy
+from .configuration_groot import GrootConfig
+from .groot_n1 import GR00TN15
 
 T = TypeVar("T", bound="GrootPolicy")
 
@@ -58,6 +60,7 @@ class GrootPolicy(PreTrainedPolicy):
 
     def __init__(self, config: GrootConfig, **kwargs):
         """Initialize Groot policy wrapper."""
+        require_package("transformers", extra="groot")
         super().__init__(config)
         config.validate_features()
         self.config = config
@@ -85,10 +88,6 @@ class GrootPolicy(PreTrainedPolicy):
             tune_visual=self.config.tune_visual,
             tune_projector=self.config.tune_projector,
             tune_diffusion_model=self.config.tune_diffusion_model,
-            lora_rank=self.config.lora_rank,
-            lora_alpha=self.config.lora_alpha,
-            lora_dropout=self.config.lora_dropout,
-            lora_target=self.config.lora_target,
         )
 
         model.compute_dtype = "bfloat16" if self.config.use_bf16 else model.compute_dtype
@@ -149,17 +148,15 @@ class GrootPolicy(PreTrainedPolicy):
 
         model_id = str(pretrained_name_or_path)
         is_finetuned_checkpoint = False
-        model_file = None
 
         # Check if this is a fine-tuned LeRobot checkpoint (has model.safetensors)
         try:
             if os.path.isdir(model_id):
-                model_file = os.path.join(model_id, SAFETENSORS_SINGLE_FILE)
-                is_finetuned_checkpoint = os.path.exists(model_file)
+                is_finetuned_checkpoint = os.path.exists(os.path.join(model_id, SAFETENSORS_SINGLE_FILE))
             else:
                 # Try to download the safetensors file to check if it exists
                 try:
-                    model_file = hf_hub_download(
+                    hf_hub_download(
                         repo_id=model_id,
                         filename=SAFETENSORS_SINGLE_FILE,
                         revision=revision,
@@ -176,56 +173,21 @@ class GrootPolicy(PreTrainedPolicy):
             is_finetuned_checkpoint = False
 
         if is_finetuned_checkpoint:
+            # This is a fine-tuned LeRobot checkpoint - use parent class loading
             print("Detected fine-tuned LeRobot checkpoint, loading with state dict...")
-
-            # Load config if not provided
-            if config is None:
-                from lerobot.configs.policies import PreTrainedConfig
-
-                config = PreTrainedConfig.from_pretrained(
-                    pretrained_name_or_path=pretrained_name_or_path,
-                    force_download=force_download,
-                    resume_download=resume_download,
-                    proxies=proxies,
-                    token=token,
-                    cache_dir=cache_dir,
-                    local_files_only=local_files_only,
-                    revision=revision,
-                    **kwargs,
-                )
-
-            # Create policy instance (loads base GR00T model)
-            instance = cls(config, **kwargs)
-
-            # Load safetensors and auto-detect key format
-            if model_file is None:
-                model_file = os.path.join(model_id, SAFETENSORS_SINGLE_FILE)
-            from safetensors import safe_open
-
-            with safe_open(model_file, framework="pt") as f:
-                first_key = next(iter(f.keys()), "")
-
-            # Isaac-GR00T checkpoints use bare keys (e.g. "action_head.*").
-            # LeRobot checkpoints use "_groot_model." prefix.
-            # Remap Isaac-GR00T keys so they match the wrapped model.
-            if not first_key.startswith("_groot_model."):
-                print("Isaac-GR00T key format detected — remapping keys with '_groot_model.' prefix")
-                import tempfile
-
-                import torch
-                from safetensors.torch import load_file, save_file
-
-                raw_sd = load_file(model_file)
-                remapped = {"_groot_model." + k: v for k, v in raw_sd.items()}
-                with tempfile.NamedTemporaryFile(suffix=".safetensors", delete=False) as tmp:
-                    tmp_path = tmp.name
-                save_file(remapped, tmp_path)
-                model_file = tmp_path
-
-            policy = cls._load_as_safetensor(instance, model_file, config.device, strict=False)
-            policy.to(config.device)
-            policy.eval()
-            return policy
+            return super().from_pretrained(
+                pretrained_name_or_path=pretrained_name_or_path,
+                config=config,
+                force_download=force_download,
+                resume_download=resume_download,
+                proxies=proxies,
+                token=token,
+                cache_dir=cache_dir,
+                local_files_only=local_files_only,
+                revision=revision,
+                strict=strict,
+                **kwargs,
+            )
 
         # This is a base GR00T model - load it fresh
         print("Detected base GR00T model, loading from HuggingFace...")

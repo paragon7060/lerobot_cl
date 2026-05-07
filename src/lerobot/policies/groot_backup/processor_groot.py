@@ -19,7 +19,6 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 from einops import rearrange
 from PIL import Image
 
@@ -31,12 +30,11 @@ else:
     AutoProcessor = None
     ProcessorMixin = object
 
-from lerobot.configs.types import (
+from lerobot.configs import (
     FeatureType,
     NormalizationMode,
     PolicyFeature,
 )
-from lerobot.policies.groot.configuration_groot import GrootConfig
 from lerobot.processor import (
     AddBatchDimensionProcessorStep,
     DeviceProcessorStep,
@@ -45,8 +43,6 @@ from lerobot.processor import (
     ProcessorStep,
     ProcessorStepRegistry,
     RenameObservationsProcessorStep,
-)
-from lerobot.processor.converters import (
     policy_action_to_transition,
     transition_to_policy_action,
 )
@@ -57,27 +53,14 @@ from lerobot.utils.constants import (
     OBS_IMAGE,
     OBS_IMAGES,
     OBS_STATE,
-    OBS_STR,
     POLICY_POSTPROCESSOR_DEFAULT_NAME,
     POLICY_PREPROCESSOR_DEFAULT_NAME,
 )
 
+from .configuration_groot import GrootConfig
+
 # Defaults for Eagle processor locations
 DEFAULT_TOKENIZER_ASSETS_REPO = "lerobot/eagle2hg-processor-groot-n1p5"
-OFFICIAL_ROBOT_STATE_KEY = f"{OBS_STR}.robot_state"
-OFFICIAL_PANDA_OMRON_STATE_ORDER = (
-    "end_effector_position_relative",
-    "end_effector_rotation_relative",
-    "gripper_qpos",
-    "base_position",
-    "base_rotation",
-)
-
-# Official PandaOmronDataConfig concat order:
-# [eef_pos(3), eef_rot_axis_angle(3), gripper(1), base_motion(4), control_mode(1)]
-OFFICIAL_ACTION_DIM = 12
-OFFICIAL_GRIPPER_CLOSE_INDEX = 6
-OFFICIAL_CONTROL_MODE_INDEX = 11
 
 
 def make_groot_pre_post_processors(
@@ -209,35 +192,6 @@ def _to_uint8_np_bhwc(img_t: torch.Tensor) -> np.ndarray:
     return rearrange(img_t.cpu().numpy(), "b c h w -> b h w c")
 
 
-def _quaternion_wxyz_to_matrix(quaternions: torch.Tensor) -> torch.Tensor:
-    r, i, j, k = torch.unbind(quaternions, -1)
-    two_s = 2.0 / (quaternions * quaternions).sum(-1).clamp_min(1e-12)
-    o = torch.stack(
-        (
-            1 - two_s * (j * j + k * k),
-            two_s * (i * j - k * r),
-            two_s * (i * k + j * r),
-            two_s * (i * j + k * r),
-            1 - two_s * (i * i + k * k),
-            two_s * (j * k - i * r),
-            two_s * (i * k - j * r),
-            two_s * (j * k + i * r),
-            1 - two_s * (i * i + j * j),
-        ),
-        dim=-1,
-    )
-    return o.reshape(quaternions.shape[:-1] + (3, 3))
-
-
-def _matrix_to_rotation_6d(matrix: torch.Tensor) -> torch.Tensor:
-    batch_dim = matrix.size()[:-2]
-    return matrix[..., :2, :].clone().reshape(batch_dim + (6,))
-
-
-def _quat_wxyz_to_rot6d(quaternions: torch.Tensor) -> torch.Tensor:
-    return _matrix_to_rotation_6d(_quaternion_wxyz_to_matrix(quaternions))
-
-
 def _build_eagle_processor(tokenizer_assets_repo: str = DEFAULT_TOKENIZER_ASSETS_REPO) -> ProcessorMixin:
     # Validate that the cache directory is ready. If not, instruct the user.
     cache_dir = HF_LEROBOT_HOME / tokenizer_assets_repo
@@ -316,20 +270,6 @@ class GrootPackInputsStep(ProcessorStep):
             mapped = 2 * (x - min_v) / safe_denom - 1
             return torch.where(mask, mapped, torch.zeros_like(mapped))
 
-        def _robot_state_tensor(robot_state: dict[str, Any], key: str, target_dim: int) -> torch.Tensor:
-            if key not in robot_state:
-                raise KeyError(f"Missing robot_state key: {key}")
-            value = robot_state[key]
-            tensor = value if isinstance(value, torch.Tensor) else torch.as_tensor(value)
-            tensor = tensor.to(dtype=torch.float32)
-            if tensor.dim() == 1:
-                tensor = tensor.unsqueeze(0)
-            if tensor.shape[-1] != target_dim:
-                raise ValueError(
-                    f"robot_state[{key!r}] expected dim {target_dim}, got {tuple(tensor.shape)}"
-                )
-            return tensor
-
         # 1) Video (B, T=1, V, H, W, C) uint8
         img_keys = sorted([k for k in obs if k.startswith(OBS_IMAGES)])
         if not img_keys and OBS_IMAGE in obs:
@@ -357,32 +297,14 @@ class GrootPackInputsStep(ProcessorStep):
         comp["language"] = lang
 
         # 3) State/state_mask -> (B, 1, max_state_dim)
-        state = None
-        if OFFICIAL_ROBOT_STATE_KEY in obs:
-            robot_state = obs[OFFICIAL_ROBOT_STATE_KEY]
-            if not isinstance(robot_state, dict):
-                raise TypeError(
-                    f"{OFFICIAL_ROBOT_STATE_KEY} must be a dict, got {type(robot_state).__name__}"
-                )
-            eef_pos = _robot_state_tensor(robot_state, "end_effector_position_relative", 3)
-            eef_rot = _quat_wxyz_to_rot6d(
-                _robot_state_tensor(robot_state, "end_effector_rotation_relative", 4)
-            )
-            gripper = _robot_state_tensor(robot_state, "gripper_qpos", 2)
-            base_pos = _robot_state_tensor(robot_state, "base_position", 3)
-            base_rot = _quat_wxyz_to_rot6d(_robot_state_tensor(robot_state, "base_rotation", 4))
-            state = torch.cat([eef_pos, eef_rot, gripper, base_pos, base_rot], dim=-1)
-            # Flat OBS_STATE stats from earlier wrappers are not reliable here because
-            # the official contract expands quaternion state to rotation_6d.
-        elif OBS_STATE in obs:
+        if OBS_STATE in obs:
             state = obs[OBS_STATE]  # (B, D)
             if state.dim() != 2:
                 raise ValueError(f"state must be (B, D), got {tuple(state.shape)}")
+            bsz, d = state.shape
+            # Normalize BEFORE padding
             if self.normalize_min_max:
                 state = _min_max_norm(state, OBS_STATE)
-
-        if isinstance(state, torch.Tensor):
-            bsz, d = state.shape
             state = state.unsqueeze(1)  # (B, 1, D)
             if d > self.max_state_dim:
                 state = state[:, :, : self.max_state_dim]
@@ -690,14 +612,6 @@ class GrootActionUnpackUnnormalizeStep(ProcessorStep):
             safe_denom = torch.where(mask, denom, torch.ones_like(denom))
             inv = (action + 1.0) * 0.5 * safe_denom + min_v
             action = torch.where(mask, inv, min_v)
-
-        if action.shape[-1] >= OFFICIAL_ACTION_DIM:
-            action[..., OFFICIAL_GRIPPER_CLOSE_INDEX] = (
-                action[..., OFFICIAL_GRIPPER_CLOSE_INDEX] > 0.5
-            ).to(action.dtype)
-            action[..., OFFICIAL_CONTROL_MODE_INDEX] = (
-                action[..., OFFICIAL_CONTROL_MODE_INDEX] > 0.5
-            ).to(action.dtype)
 
         transition[TransitionKey.ACTION] = action
         return transition

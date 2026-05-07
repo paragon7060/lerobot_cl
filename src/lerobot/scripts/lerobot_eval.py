@@ -548,6 +548,8 @@ def eval_main(cfg: EvalPipelineConfig):
 
     # Create environment-specific preprocessor and postprocessor (e.g., for LIBERO environments)
     env_preprocessor, env_postprocessor = make_env_pre_post_processors(env_cfg=cfg.env, policy_cfg=cfg.policy)
+    output_dir = Path(cfg.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     with torch.no_grad(), torch.autocast(device_type=device.type) if cfg.policy.use_amp else nullcontext():
         info = eval_policy_all(
@@ -559,9 +561,7 @@ def eval_main(cfg: EvalPipelineConfig):
             postprocessor=postprocessor,
             n_episodes=cfg.eval.n_episodes,
             max_episodes_rendered=cfg.eval.max_episodes_rendered,
-            videos_dir=(
-                Path(cfg.output_dir) / "videos" if cfg.eval.max_episodes_rendered > 0 else None
-            ),
+            videos_dir=(output_dir / "videos" if cfg.eval.max_episodes_rendered > 0 else None),
             start_seed=cfg.seed,
             max_parallel_tasks=cfg.env.max_parallel_tasks,
         )
@@ -576,7 +576,7 @@ def eval_main(cfg: EvalPipelineConfig):
     close_envs(envs)
 
     # Save info
-    with open(Path(cfg.output_dir) / "eval_info.json", "w") as f:
+    with open(output_dir / "eval_info.json", "w") as f:
         json.dump(info, f, indent=2)
 
     logging.info("End of eval")

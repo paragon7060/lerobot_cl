@@ -15,6 +15,7 @@
 # limitations under the License.
 
 from dataclasses import dataclass, field
+import logging
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -31,12 +32,11 @@ else:
     AutoProcessor = None
     ProcessorMixin = object
 
-from lerobot.configs.types import (
+from lerobot.configs import (
     FeatureType,
     NormalizationMode,
     PolicyFeature,
 )
-from lerobot.policies.groot.configuration_groot import GrootConfig
 from lerobot.processor import (
     AddBatchDimensionProcessorStep,
     DeviceProcessorStep,
@@ -45,8 +45,6 @@ from lerobot.processor import (
     ProcessorStep,
     ProcessorStepRegistry,
     RenameObservationsProcessorStep,
-)
-from lerobot.processor.converters import (
     policy_action_to_transition,
     transition_to_policy_action,
 )
@@ -57,27 +55,15 @@ from lerobot.utils.constants import (
     OBS_IMAGE,
     OBS_IMAGES,
     OBS_STATE,
-    OBS_STR,
     POLICY_POSTPROCESSOR_DEFAULT_NAME,
     POLICY_PREPROCESSOR_DEFAULT_NAME,
 )
 
+from .configuration_groot import GrootConfig
+
 # Defaults for Eagle processor locations
 DEFAULT_TOKENIZER_ASSETS_REPO = "lerobot/eagle2hg-processor-groot-n1p5"
-OFFICIAL_ROBOT_STATE_KEY = f"{OBS_STR}.robot_state"
-OFFICIAL_PANDA_OMRON_STATE_ORDER = (
-    "end_effector_position_relative",
-    "end_effector_rotation_relative",
-    "gripper_qpos",
-    "base_position",
-    "base_rotation",
-)
-
-# Official PandaOmronDataConfig concat order:
-# [eef_pos(3), eef_rot_axis_angle(3), gripper(1), base_motion(4), control_mode(1)]
-OFFICIAL_ACTION_DIM = 12
-OFFICIAL_GRIPPER_CLOSE_INDEX = 6
-OFFICIAL_CONTROL_MODE_INDEX = 11
+logger = logging.getLogger(__name__)
 
 
 def make_groot_pre_post_processors(
@@ -209,33 +195,27 @@ def _to_uint8_np_bhwc(img_t: torch.Tensor) -> np.ndarray:
     return rearrange(img_t.cpu().numpy(), "b c h w -> b h w c")
 
 
-def _quaternion_wxyz_to_matrix(quaternions: torch.Tensor) -> torch.Tensor:
-    r, i, j, k = torch.unbind(quaternions, -1)
-    two_s = 2.0 / (quaternions * quaternions).sum(-1).clamp_min(1e-12)
-    o = torch.stack(
-        (
-            1 - two_s * (j * j + k * k),
-            two_s * (i * j - k * r),
-            two_s * (i * k + j * r),
-            two_s * (i * j + k * r),
-            1 - two_s * (i * i + k * k),
-            two_s * (j * k - i * r),
-            two_s * (i * k - j * r),
-            two_s * (j * k + i * r),
-            1 - two_s * (i * i + j * j),
-        ),
-        dim=-1,
-    )
-    return o.reshape(quaternions.shape[:-1] + (3, 3))
-
-
-def _matrix_to_rotation_6d(matrix: torch.Tensor) -> torch.Tensor:
-    batch_dim = matrix.size()[:-2]
-    return matrix[..., :2, :].clone().reshape(batch_dim + (6,))
-
-
-def _quat_wxyz_to_rot6d(quaternions: torch.Tensor) -> torch.Tensor:
-    return _matrix_to_rotation_6d(_quaternion_wxyz_to_matrix(quaternions))
+def _quat_to_rot6d(quat: torch.Tensor) -> torch.Tensor:
+    """Convert quaternion (...,4, wxyz) to rotation6d (...,6)."""
+    q = F.normalize(quat, dim=-1)
+    w, x, y, z = q.unbind(dim=-1)
+    xx, yy, zz = x * x, y * y, z * z
+    xy, xz, yz = x * y, x * z, y * z
+    wx, wy, wz = w * x, w * y, w * z
+    r00 = 1 - 2 * (yy + zz)
+    r01 = 2 * (xy - wz)
+    r02 = 2 * (xz + wy)
+    r10 = 2 * (xy + wz)
+    r11 = 1 - 2 * (xx + zz)
+    r12 = 2 * (yz - wx)
+    r20 = 2 * (xz - wy)
+    r21 = 2 * (yz + wx)
+    r22 = 1 - 2 * (xx + yy)
+    # matrix rows then take first 2 rows flattened => rotation_6d
+    r0 = torch.stack([r00, r01, r02], dim=-1)
+    r1 = torch.stack([r10, r11, r12], dim=-1)
+    _ = (r20, r21, r22)  # keep explicit for clarity, unused in 6d projection
+    return torch.cat([r0, r1], dim=-1)
 
 
 def _build_eagle_processor(tokenizer_assets_repo: str = DEFAULT_TOKENIZER_ASSETS_REPO) -> ProcessorMixin:
@@ -265,6 +245,11 @@ class GrootPackInputsStep(ProcessorStep):
     max_state_dim: int = 64
     max_action_dim: int = 32
     language_key: str = "task"
+    language_key_candidates: tuple[str, ...] = (
+        "annotation.human.task_description",
+        "annotation.human.action.task_description",
+        "task",
+    )
     formalize_language: bool = False
     embodiment_tag: str = "new_embodiment"
     embodiment_mapping: dict[str, int] = field(
@@ -280,6 +265,7 @@ class GrootPackInputsStep(ProcessorStep):
     # Min-max normalization (SO100-like) applied BEFORE padding
     normalize_min_max: bool = True
     stats: dict[str, dict[str, Any]] | None = None
+    _logged_language_once: bool = field(default=False, init=False, repr=False)
 
     def __call__(self, transition: EnvTransition) -> EnvTransition:
         obs = transition.get(TransitionKey.OBSERVATION, {}) or {}
@@ -316,19 +302,46 @@ class GrootPackInputsStep(ProcessorStep):
             mapped = 2 * (x - min_v) / safe_denom - 1
             return torch.where(mask, mapped, torch.zeros_like(mapped))
 
-        def _robot_state_tensor(robot_state: dict[str, Any], key: str, target_dim: int) -> torch.Tensor:
-            if key not in robot_state:
-                raise KeyError(f"Missing robot_state key: {key}")
-            value = robot_state[key]
-            tensor = value if isinstance(value, torch.Tensor) else torch.as_tensor(value)
-            tensor = tensor.to(dtype=torch.float32)
-            if tensor.dim() == 1:
-                tensor = tensor.unsqueeze(0)
-            if tensor.shape[-1] != target_dim:
-                raise ValueError(
-                    f"robot_state[{key!r}] expected dim {target_dim}, got {tuple(tensor.shape)}"
-                )
-            return tensor
+        def _reorder_robocasa_state(state_vec: torch.Tensor) -> torch.Tensor:
+            """Map LeRobot RoboCasa state(16) -> PandaOmron concat state(20).
+
+            LeRobot order (16):
+              [base_pos(3), base_quat(4), ee_pos_rel(3), ee_quat_rel(4), gripper_qpos(2)]
+            PandaOmron official concat order with target_rotations(rotation_6d):
+              [ee_pos_rel(3), ee_rot6d(6), gripper_qpos(2), base_pos(3), base_rot6d(6)]
+            """
+            if state_vec.shape[-1] != 16:
+                return state_vec
+            base_pos = state_vec[..., 0:3]
+            base_quat = state_vec[..., 3:7]
+            ee_pos = state_vec[..., 7:10]
+            ee_quat = state_vec[..., 10:14]
+            gripper = state_vec[..., 14:16]
+            return torch.cat(
+                [ee_pos, _quat_to_rot6d(ee_quat), gripper, base_pos, _quat_to_rot6d(base_quat)],
+                dim=-1,
+            )
+
+        def _reorder_robocasa_action(action_vec: torch.Tensor) -> torch.Tensor:
+            """Map LeRobot RoboCasa action order -> Isaac-GR00T PandaOmron order.
+
+            LeRobot order (12):
+              [base_motion(4), control_mode(1), ee_pos(3), ee_rot(3), gripper(1)]
+            Isaac PandaOmron expected concat order:
+              [ee_pos(3), ee_rot(3), gripper(1), base_motion(4), control_mode(1)]
+            """
+            if action_vec.shape[-1] != 12:
+                return action_vec
+            return torch.cat(
+                [
+                    action_vec[..., 5:8],
+                    action_vec[..., 8:11],
+                    action_vec[..., 11:12],
+                    action_vec[..., 0:4],
+                    action_vec[..., 4:5],
+                ],
+                dim=-1,
+            )
 
         # 1) Video (B, T=1, V, H, W, C) uint8
         img_keys = sorted([k for k in obs if k.startswith(OBS_IMAGES)])
@@ -346,43 +359,54 @@ class GrootPackInputsStep(ProcessorStep):
                 obs.pop(k, None)
 
         # 2) Language (string)
-        lang = comp.get(self.language_key)
+        lang = None
+        lang_source = None
+        for key in self.language_key_candidates:
+            if key in comp and comp.get(key):
+                lang = comp.get(key)
+                lang_source = f"comp:{key}"
+                break
+            if key in obs and obs.get(key):
+                lang = obs.get(key)
+                lang_source = f"obs:{key}"
+                break
+        if lang is None:
+            lang = comp.get(self.language_key)
+            if lang:
+                lang_source = f"comp:{self.language_key}"
         if isinstance(lang, list):
             lang = lang[0] if len(lang) > 0 else None
         if not lang:
             lang = "Perform the task."
+            lang_source = "default"
         if self.formalize_language:
             lang = (lang or "").lower()
             lang = "".join(ch for ch in lang if ch.isalnum() or ch.isspace())
         comp["language"] = lang
+        comp["language_source"] = lang_source
+        if not self._logged_language_once:
+            logger.info("[groot_robocasa] first-step language: %s (source=%s)", lang, lang_source)
+            self._logged_language_once = True
 
         # 3) State/state_mask -> (B, 1, max_state_dim)
-        state = None
-        if OFFICIAL_ROBOT_STATE_KEY in obs:
-            robot_state = obs[OFFICIAL_ROBOT_STATE_KEY]
-            if not isinstance(robot_state, dict):
-                raise TypeError(
-                    f"{OFFICIAL_ROBOT_STATE_KEY} must be a dict, got {type(robot_state).__name__}"
-                )
-            eef_pos = _robot_state_tensor(robot_state, "end_effector_position_relative", 3)
-            eef_rot = _quat_wxyz_to_rot6d(
-                _robot_state_tensor(robot_state, "end_effector_rotation_relative", 4)
-            )
-            gripper = _robot_state_tensor(robot_state, "gripper_qpos", 2)
-            base_pos = _robot_state_tensor(robot_state, "base_position", 3)
-            base_rot = _quat_wxyz_to_rot6d(_robot_state_tensor(robot_state, "base_rotation", 4))
-            state = torch.cat([eef_pos, eef_rot, gripper, base_pos, base_rot], dim=-1)
-            # Flat OBS_STATE stats from earlier wrappers are not reliable here because
-            # the official contract expands quaternion state to rotation_6d.
-        elif OBS_STATE in obs:
+        if OBS_STATE in obs:
             state = obs[OBS_STATE]  # (B, D)
             if state.dim() != 2:
                 raise ValueError(f"state must be (B, D), got {tuple(state.shape)}")
-            if self.normalize_min_max:
-                state = _min_max_norm(state, OBS_STATE)
-
-        if isinstance(state, torch.Tensor):
+            state = _reorder_robocasa_state(state)
             bsz, d = state.shape
+            # Normalize BEFORE padding with PandaOmron per-key ranges when available.
+            if self.normalize_min_max and d >= 20:
+                state_parts = [
+                    _min_max_norm(state[..., 0:3], "state.end_effector_position_relative"),
+                    _min_max_norm(state[..., 3:9], "state.end_effector_rotation_relative"),
+                    _min_max_norm(state[..., 9:11], "state.gripper_qpos"),
+                    _min_max_norm(state[..., 11:14], "state.base_position"),
+                    _min_max_norm(state[..., 14:20], "state.base_rotation"),
+                ]
+                state = torch.cat(state_parts, dim=-1)
+            elif self.normalize_min_max:
+                state = _min_max_norm(state, OBS_STATE)
             state = state.unsqueeze(1)  # (B, 1, D)
             if d > self.max_state_dim:
                 state = state[:, :, : self.max_state_dim]
@@ -395,18 +419,25 @@ class GrootPackInputsStep(ProcessorStep):
             obs["state"] = state
             obs["state_mask"] = state_mask
 
+        def _apply_action_norm_and_binary(action_vec: torch.Tensor) -> torch.Tensor:
+            # Isaac order (12): [ee_pos(3), ee_rot(3), gripper(1), base_motion(4), control_mode(1)]
+            out = action_vec.clone()
+            if self.normalize_min_max:
+                out[..., 0:3] = _min_max_norm(out[..., 0:3], "action.end_effector_position")
+                out[..., 3:6] = _min_max_norm(out[..., 3:6], "action.end_effector_rotation")
+                out[..., 7:11] = _min_max_norm(out[..., 7:11], "action.base_motion")
+            # Official binary mode threshold
+            out[..., 6:7] = (out[..., 6:7] > 0.5).to(out.dtype)
+            out[..., 11:12] = (out[..., 11:12] > 0.5).to(out.dtype)
+            return out
+
         # 4) Action/action_mask -> (B, action_horizon, max_action_dim)
         action = transition.get(TransitionKey.ACTION)
         if isinstance(action, torch.Tensor):
-            # Normalize BEFORE temporal expansion/padding
-            if self.normalize_min_max:
-                if action.dim() == 2:
-                    action = _min_max_norm(action, ACTION)
-                elif action.dim() == 3:
-                    b, t, d = action.shape
-                    flat = action.reshape(b * t, d)
-                    flat = _min_max_norm(flat, ACTION)
-                    action = flat.view(b, t, d)
+            action = _reorder_robocasa_action(action)
+            # Normalize BEFORE temporal expansion/padding with official per-key rules.
+            if action.shape[-1] >= 12:
+                action = _apply_action_norm_and_binary(action)
             if action.dim() == 2:
                 action = action.unsqueeze(1).repeat(1, self.action_horizon, 1)
             elif action.dim() == 3:
@@ -660,44 +691,56 @@ class GrootActionUnpackUnnormalizeStep(ProcessorStep):
         if not isinstance(action, torch.Tensor):
             return transition
 
-        # Select last timestep and slice to env dimension
+        # Select first timestep (official chunk execution starts from index 0) and slice to env dimension
         if action.dim() == 3:
-            action = action[:, -1, :]
+            action = action[:, 0, :]
         # Now action is (B, D_model)
         if self.env_action_dim and action.shape[-1] >= self.env_action_dim:
             action = action[..., : self.env_action_dim]
 
-        # Inverse min-max normalization mirroring _min_max_norm:
-        # forward: y = 2 * (x - min) / denom - 1, with y=0 when denom==0
-        # inverse: x = (y+1)/2 * denom + min, and when denom==0 -> x = min
-        if self.normalize_min_max and self.stats is not None:
-            stats_k = self.stats.get(ACTION, {})
-            d = action.shape[-1]
-            min_v = torch.as_tensor(
-                stats_k.get("min", torch.zeros(d)), dtype=action.dtype, device=action.device
-            )
-            max_v = torch.as_tensor(
-                stats_k.get("max", torch.ones(d)), dtype=action.dtype, device=action.device
-            )
-            if min_v.numel() != d:
-                min_v = torch.nn.functional.pad(min_v.flatten()[:d], (0, max(0, d - min_v.numel())))
-                min_v = min_v.to(action.device, dtype=action.dtype)
-            if max_v.numel() != d:
-                max_v = torch.nn.functional.pad(max_v.flatten()[:d], (0, max(0, d - max_v.numel())))
-                max_v = max_v.to(action.device, dtype=action.dtype)
-            denom = max_v - min_v
-            mask = denom != 0
-            safe_denom = torch.where(mask, denom, torch.ones_like(denom))
-            inv = (action + 1.0) * 0.5 * safe_denom + min_v
-            action = torch.where(mask, inv, min_v)
+        def _inv_min_max(x: torch.Tensor, key: str) -> torch.Tensor:
+            if not (self.normalize_min_max and self.stats is not None):
+                return x
+            stats_k = self.stats.get(key)
+            if stats_k is None:
+                return x
+            d = x.shape[-1]
+            min_v = torch.as_tensor(stats_k.get("min", torch.zeros(d)), dtype=x.dtype, device=x.device).flatten()[:d]
+            max_v = torch.as_tensor(stats_k.get("max", torch.ones(d)), dtype=x.dtype, device=x.device).flatten()[:d]
+            if min_v.numel() < d:
+                min_v = F.pad(min_v, (0, d - min_v.numel()))
+            if max_v.numel() < d:
+                max_v = F.pad(max_v, (0, d - max_v.numel()))
+            return (x + 1.0) * 0.5 * (max_v - min_v) + min_v
 
-        if action.shape[-1] >= OFFICIAL_ACTION_DIM:
-            action[..., OFFICIAL_GRIPPER_CLOSE_INDEX] = (
-                action[..., OFFICIAL_GRIPPER_CLOSE_INDEX] > 0.5
-            ).to(action.dtype)
-            action[..., OFFICIAL_CONTROL_MODE_INDEX] = (
-                action[..., OFFICIAL_CONTROL_MODE_INDEX] > 0.5
-            ).to(action.dtype)
+        # Apply official PandaOmron post rules in Isaac action order:
+        # minmax dims: ee_pos(0:3), ee_rot(3:6), base_motion(7:11)
+        # binary dims: gripper(6), control_mode(11)
+        if action.shape[-1] >= 12:
+            action = action.clone()
+            action[..., 0:3] = _inv_min_max(action[..., 0:3], "action.end_effector_position")
+            action[..., 3:6] = _inv_min_max(action[..., 3:6], "action.end_effector_rotation")
+            action[..., 7:11] = _inv_min_max(action[..., 7:11], "action.base_motion")
+            action[..., 6:7] = (action[..., 6:7] > 0.5).to(action.dtype)
+            action[..., 11:12] = (action[..., 11:12] > 0.5).to(action.dtype)
+        elif self.normalize_min_max and self.stats is not None:
+            # Fallback for non-12D action
+            action = _inv_min_max(action, ACTION)
+
+        # Map Isaac PandaOmron action order back to LeRobot RoboCasa env order.
+        # Isaac order (12): [ee_pos(3), ee_rot(3), gripper(1), base_motion(4), control_mode(1)]
+        # LeRobot order (12): [base_motion(4), control_mode(1), ee_pos(3), ee_rot(3), gripper(1)]
+        if action.shape[-1] == 12:
+            action = torch.cat(
+                [
+                    action[..., 7:11],
+                    action[..., 11:12],
+                    action[..., 0:3],
+                    action[..., 3:6],
+                    action[..., 6:7],
+                ],
+                dim=-1,
+            )
 
         transition[TransitionKey.ACTION] = action
         return transition
