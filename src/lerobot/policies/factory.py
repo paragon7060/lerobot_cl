@@ -301,6 +301,22 @@ def make_pre_post_processors(
             }
             kwargs["preprocessor_overrides"] = preprocessor_overrides
             kwargs["postprocessor_overrides"] = postprocessor_overrides
+        elif isinstance(policy_cfg, GrootRobocasaConfig):
+            # GrootRobocasaConfig must be checked before GrootConfig (it's a subclass)
+            preprocessor_overrides = {}
+            postprocessor_overrides = {}
+            preprocessor_overrides["groot_pack_inputs_v3"] = {
+                "stats": kwargs.get("dataset_stats"),
+                "normalize_min_max": True,
+            }
+            env_action_dim = policy_cfg.output_features[ACTION].shape[0]
+            postprocessor_overrides["groot_action_unpack_unnormalize_v1"] = {
+                "stats": kwargs.get("dataset_stats"),
+                "normalize_min_max": True,
+                "env_action_dim": env_action_dim,
+            }
+            kwargs["preprocessor_overrides"] = preprocessor_overrides
+            kwargs["postprocessor_overrides"] = postprocessor_overrides
         elif isinstance(policy_cfg, GrootConfig):
             # GROOT handles normalization in groot_pack_inputs_v3 step
             # Need to override both stats AND normalize_min_max since saved config might be empty
@@ -453,6 +469,14 @@ def make_pre_post_processors(
             config=policy_cfg,
             dataset_stats=kwargs.get("dataset_stats"),
         )
+    elif isinstance(policy_cfg, GrootRobocasaConfig):
+        # GrootRobocasaConfig must be checked before GrootConfig (it's a subclass)
+        from lerobot.policies.groot_robocasa.processor_groot import make_groot_pre_post_processors
+
+        processors = make_groot_pre_post_processors(
+            config=policy_cfg,
+            dataset_stats=kwargs.get("dataset_stats"),
+        )
     elif isinstance(policy_cfg, GrootConfig):
         from lerobot.policies.groot.processor_groot import make_groot_pre_post_processors
 
@@ -462,13 +486,6 @@ def make_pre_post_processors(
         )
     elif isinstance(policy_cfg, GrootMGDConfig):
         from lerobot.policies.groot.processor_groot import make_groot_pre_post_processors
-
-        processors = make_groot_pre_post_processors(
-            config=policy_cfg,
-            dataset_stats=kwargs.get("dataset_stats"),
-        )
-    elif isinstance(policy_cfg, GrootRobocasaConfig):
-        from lerobot.policies.groot_robocasa.processor_groot import make_groot_pre_post_processors
 
         processors = make_groot_pre_post_processors(
             config=policy_cfg,

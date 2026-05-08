@@ -534,6 +534,29 @@ def eval_main(cfg: EvalPipelineConfig):
 
     policy.eval()
 
+    # Load normalization stats if a stats path is provided.
+    # Supports Isaac-GR00T metadata.json format: {embodiment_tag: {statistics: {state: {...}, action: {...}}}}
+    dataset_stats = None
+    if cfg.dataset_stats_path:
+        stats_path = Path(cfg.dataset_stats_path)
+        with open(stats_path) as f:
+            raw = json.load(f)
+        embodiment_tag = getattr(cfg.policy, "embodiment_tag", "new_embodiment")
+        meta = raw.get(embodiment_tag, raw.get(list(raw.keys())[0], {}))
+        statistics = meta.get("statistics", meta)
+        dataset_stats = {}
+        for modality, keys in statistics.items():
+            if not isinstance(keys, dict):
+                continue
+            for key, key_stats in keys.items():
+                full_key = f"{modality}.{key}"
+                dataset_stats[full_key] = {
+                    stat_name: torch.tensor(val, dtype=torch.float32)
+                    for stat_name, val in key_stats.items()
+                    if isinstance(val, (list, float, int))
+                }
+        logging.info(f"Loaded normalization stats from {stats_path}: {list(dataset_stats.keys())}")
+
     # The inference device is automatically set to match the detected hardware, overriding any previous device settings from training to ensure compatibility.
     preprocessor_overrides = {
         "device_processor": {"device": str(policy.config.device)},
@@ -544,6 +567,7 @@ def eval_main(cfg: EvalPipelineConfig):
         policy_cfg=cfg.policy,
         pretrained_path=cfg.policy.pretrained_path,
         preprocessor_overrides=preprocessor_overrides,
+        dataset_stats=dataset_stats,
     )
 
     # Create environment-specific preprocessor and postprocessor (e.g., for LIBERO environments)
