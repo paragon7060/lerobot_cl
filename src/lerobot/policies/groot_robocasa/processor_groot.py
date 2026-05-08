@@ -32,11 +32,8 @@ else:
     AutoProcessor = None
     ProcessorMixin = object
 
-from lerobot.configs import (
-    FeatureType,
-    NormalizationMode,
-    PolicyFeature,
-)
+from lerobot.configs.types import FeatureType, NormalizationMode
+from lerobot.configs.policies import PolicyFeature
 from lerobot.processor import (
     AddBatchDimensionProcessorStep,
     DeviceProcessorStep,
@@ -45,9 +42,8 @@ from lerobot.processor import (
     ProcessorStep,
     ProcessorStepRegistry,
     RenameObservationsProcessorStep,
-    policy_action_to_transition,
-    transition_to_policy_action,
 )
+from lerobot.processor.converters import policy_action_to_transition, transition_to_policy_action
 from lerobot.types import EnvTransition, TransitionKey
 from lerobot.utils.constants import (
     ACTION,

@@ -2,7 +2,8 @@
 
 from dataclasses import dataclass, field
 
-from lerobot.configs import FeatureType, PolicyFeature, PreTrainedConfig
+from lerobot.configs.policies import PolicyFeature, PreTrainedConfig
+from lerobot.configs.types import FeatureType
 from lerobot.utils.constants import ACTION
 
 from ..groot.configuration_groot import GrootConfig

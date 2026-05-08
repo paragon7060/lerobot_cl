@@ -3122,3 +3122,311 @@ trainable params: 3,735,552 || all params: 918,410,240 || trainable%: 0.4067
 The tokenizer you are loading from '/home/seonho/.cache/huggingface/lerobot/lerobot/eagle2hg-processor-groot-n1p5' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
 The tokenizer you are loading from '/home/seonho/.cache/huggingface/lerobot/lerobot/eagle2hg-processor-groot-n1p5' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
 wandb: Adding directory to artifact (/home/seonho/groot_robocasa/groot_pretrain_mgd_lora_only/checkpoints/020000)... Done. 16.2s
+wandb: Adding directory to artifact (/home/seonho/groot_robocasa/groot_pretrain_mgd_lora_only/checkpoints/040000)... Done. 15.9s
+WARNING:lerobot.configs.policies:Device 'None' is not available. Switching to 'cuda'.
+wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from /home/seonho/.netrc.
+wandb: Currently logged in as: junhyeong to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: setting up run pdjce9t8
+wandb: Tracking run with wandb version 0.24.2
+wandb: Run data is saved locally in /home/seonho/groot_robocasa/groot_target_mgd_lora_only/wandb/run-20260506_153319-pdjce9t8
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run fluent-armadillo-6
+wandb: ⭐️ View project at https://wandb.ai/RwHlabs/groot_mgd
+wandb: 🚀 View run at https://wandb.ai/RwHlabs/groot_mgd/runs/pdjce9t8
+[GROOT] Flash Attention version: 2.8.3
+Loading pretrained dual brain from nvidia/GR00T-N1.5-3B
+Tune backbone vision tower: False
+Tune backbone LLM: False
+Tune action head projector: True
+Tune action head DiT: True
+LoRA enabled: rank=8, alpha=16, dropout=0.05
+Fetching 13 files:   0%|          | 0/13 [00:00<?, ?it/s]Fetching 13 files: 100%|██████████| 13/13 [00:00<00:00, 21714.84it/s]
+`torch_dtype` is deprecated! Use `dtype` instead!
+WARNING:lerobot.policies.groot_mgd.modeling_groot:After loading groot_pretrained_path, missing keys (303): ['backbone.eagle_model.language_model.base_model.model.model.embed_tokens.weight', 'backbone.eagle_model.language_model.base_model.model.model.layers.0.self_attn.q_proj.base_layer.weight', 'backbone.eagle_model.language_model.base_model.model.model.layers.0.self_attn.q_proj.lora_A.default.weight'] ...
+WARNING:lerobot.policies.groot_mgd.modeling_groot:After loading groot_pretrained_path, unexpected keys (134): ['backbone.eagle_model.language_model.lm_head.weight', 'backbone.eagle_model.language_model.model.layers.0.input_layernorm.weight', 'backbone.eagle_model.language_model.model.layers.0.mlp.down_proj.weight'] ...
+[GROOT] Copying vendor Eagle files to cache: /home/seonho/clvla/lerobot_cl/src/lerobot/policies/groot_mgd/eagle2_hg_model -> /home/seonho/.cache/huggingface/lerobot/lerobot/eagle2hg-processor-groot-n1p5
+[GROOT] Assets repo: lerobot/eagle2hg-processor-groot-n1p5 
+ Cache dir: /home/seonho/.cache/huggingface/lerobot/lerobot/eagle2hg-processor-groot-n1p5
+Tune backbone llm: False
+Tune backbone visual: True
+Total number of DiT parameters:  550386688
+Total number of SelfAttentionTransformer parameters:  201433088
+Tune action head projector: True
+Tune action head diffusion model: True
+Tune backbone llm: False
+Tune backbone visual: False
+Warning: No backbone trainable parameters found.
+Tune action head projector: True
+Tune action head diffusion model: True
+trainable params: 3,735,552 || all params: 918,410,240 || trainable%: 0.4067
+/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/torchvision/io/_video_deprecation_warning.py:5: UserWarning: The video decoding and encoding capabilities of torchvision are deprecated from version 0.22 and will be removed in version 0.24. We recommend that you migrate to TorchCodec, where we'll consolidate the future decoding/encoding capabilities of PyTorch: https://github.com/pytorch/torchcodec
+  warnings.warn(
+/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/torchvision/io/_video_deprecation_warning.py:5: UserWarning: The video decoding and encoding capabilities of torchvision are deprecated from version 0.22 and will be removed in version 0.24. We recommend that you migrate to TorchCodec, where we'll consolidate the future decoding/encoding capabilities of PyTorch: https://github.com/pytorch/torchcodec
+  warnings.warn(
+/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/torchvision/io/_video_deprecation_warning.py:5: UserWarning: The video decoding and encoding capabilities of torchvision are deprecated from version 0.22 and will be removed in version 0.24. We recommend that you migrate to TorchCodec, where we'll consolidate the future decoding/encoding capabilities of PyTorch: https://github.com/pytorch/torchcodec
+  warnings.warn(
+/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/torchvision/io/_video_deprecation_warning.py:5: UserWarning: The video decoding and encoding capabilities of torchvision are deprecated from version 0.22 and will be removed in version 0.24. We recommend that you migrate to TorchCodec, where we'll consolidate the future decoding/encoding capabilities of PyTorch: https://github.com/pytorch/torchcodec
+  warnings.warn(
+`use_fast` is set to `True` but the image processor class does not have a fast version.  Falling back to the slow version.
+The tokenizer you are loading from '/home/seonho/.cache/huggingface/lerobot/lerobot/eagle2hg-processor-groot-n1p5' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
+The tokenizer you are loading from '/home/seonho/.cache/huggingface/lerobot/lerobot/eagle2hg-processor-groot-n1p5' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
+WARNING:lerobot.configs.policies:Device 'None' is not available. Switching to 'cuda'.
+wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from /home/seonho/.netrc.
+wandb: Currently logged in as: junhyeong to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: setting up run gzirp1m0
+wandb: Tracking run with wandb version 0.24.2
+wandb: Run data is saved locally in /home/seonho/groot_robocasa/groot_target_mgd_lora_only/wandb/run-20260506_155023-gzirp1m0
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run splendid-bird-7
+wandb: ⭐️ View project at https://wandb.ai/RwHlabs/groot_mgd
+wandb: 🚀 View run at https://wandb.ai/RwHlabs/groot_mgd/runs/gzirp1m0
+[GROOT] Flash Attention version: 2.8.3
+Loading pretrained dual brain from nvidia/GR00T-N1.5-3B
+Tune backbone vision tower: False
+Tune backbone LLM: False
+Tune action head projector: True
+Tune action head DiT: True
+LoRA enabled: rank=8, alpha=16, dropout=0.05
+Fetching 13 files:   0%|          | 0/13 [00:00<?, ?it/s]Fetching 13 files: 100%|██████████| 13/13 [00:00<00:00, 16388.92it/s]
+`torch_dtype` is deprecated! Use `dtype` instead!
+WARNING:lerobot.policies.groot_mgd.modeling_groot:After loading groot_pretrained_path, missing keys (303): ['backbone.eagle_model.language_model.base_model.model.model.embed_tokens.weight', 'backbone.eagle_model.language_model.base_model.model.model.layers.0.self_attn.q_proj.base_layer.weight', 'backbone.eagle_model.language_model.base_model.model.model.layers.0.self_attn.q_proj.lora_A.default.weight'] ...
+WARNING:lerobot.policies.groot_mgd.modeling_groot:After loading groot_pretrained_path, unexpected keys (134): ['backbone.eagle_model.language_model.lm_head.weight', 'backbone.eagle_model.language_model.model.layers.0.input_layernorm.weight', 'backbone.eagle_model.language_model.model.layers.0.mlp.down_proj.weight'] ...
+[GROOT] Copying vendor Eagle files to cache: /home/seonho/clvla/lerobot_cl/src/lerobot/policies/groot_mgd/eagle2_hg_model -> /home/seonho/.cache/huggingface/lerobot/lerobot/eagle2hg-processor-groot-n1p5
+[GROOT] Assets repo: lerobot/eagle2hg-processor-groot-n1p5 
+ Cache dir: /home/seonho/.cache/huggingface/lerobot/lerobot/eagle2hg-processor-groot-n1p5
+Tune backbone llm: False
+Tune backbone visual: True
+Total number of DiT parameters:  550386688
+Total number of SelfAttentionTransformer parameters:  201433088
+Tune action head projector: True
+Tune action head diffusion model: True
+Tune backbone llm: False
+Tune backbone visual: False
+Warning: No backbone trainable parameters found.
+Tune action head projector: True
+Tune action head diffusion model: True
+trainable params: 3,735,552 || all params: 918,410,240 || trainable%: 0.4067
+/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/torchvision/io/_video_deprecation_warning.py:5: UserWarning: The video decoding and encoding capabilities of torchvision are deprecated from version 0.22 and will be removed in version 0.24. We recommend that you migrate to TorchCodec, where we'll consolidate the future decoding/encoding capabilities of PyTorch: https://github.com/pytorch/torchcodec
+  warnings.warn(
+/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/torchvision/io/_video_deprecation_warning.py:5: UserWarning: The video decoding and encoding capabilities of torchvision are deprecated from version 0.22 and will be removed in version 0.24. We recommend that you migrate to TorchCodec, where we'll consolidate the future decoding/encoding capabilities of PyTorch: https://github.com/pytorch/torchcodec
+  warnings.warn(
+/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/torchvision/io/_video_deprecation_warning.py:5: UserWarning: The video decoding and encoding capabilities of torchvision are deprecated from version 0.22 and will be removed in version 0.24. We recommend that you migrate to TorchCodec, where we'll consolidate the future decoding/encoding capabilities of PyTorch: https://github.com/pytorch/torchcodec
+  warnings.warn(
+/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/torchvision/io/_video_deprecation_warning.py:5: UserWarning: The video decoding and encoding capabilities of torchvision are deprecated from version 0.22 and will be removed in version 0.24. We recommend that you migrate to TorchCodec, where we'll consolidate the future decoding/encoding capabilities of PyTorch: https://github.com/pytorch/torchcodec
+  warnings.warn(
+`use_fast` is set to `True` but the image processor class does not have a fast version.  Falling back to the slow version.
+The tokenizer you are loading from '/home/seonho/.cache/huggingface/lerobot/lerobot/eagle2hg-processor-groot-n1p5' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
+The tokenizer you are loading from '/home/seonho/.cache/huggingface/lerobot/lerobot/eagle2hg-processor-groot-n1p5' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
+Traceback (most recent call last):
+  File "/home/seonho/clvla/lerobot_cl/scripts/train_groot_mgd.py", line 7, in <module>
+    main()
+  File "/home/seonho/clvla/lerobot_cl/src/lerobot/configs/parser.py", line 233, in wrapper_inner
+    response = fn(cfg, *args, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/seonho/clvla/lerobot_cl/src/lerobot/scripts/train_groot_mgd.py", line 344, in main
+    loss, loss_dict = policy(batch)
+                      ^^^^^^^^^^^^^
+  File "/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/seonho/clvla/lerobot_cl/src/lerobot/policies/groot_mgd/modeling_groot.py", line 567, in forward
+    z_v_base = self._compute_pooled_vlm_feature(groot_inputs, disable_lora=True).detach()
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/seonho/clvla/lerobot_cl/src/lerobot/policies/groot_mgd/modeling_groot.py", line 295, in _compute_pooled_vlm_feature
+    backbone_outputs = self._groot_model.backbone(backbone_inputs)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/seonho/clvla/lerobot_cl/src/lerobot/policies/groot_mgd/groot_n1.py", line 150, in forward
+    eagle_embeds, eagle_mask = self.forward_eagle(vl_input)
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/seonho/clvla/lerobot_cl/src/lerobot/policies/groot_mgd/groot_n1.py", line 141, in forward_eagle
+    eagle_output = self.eagle_model(**eagle_input, output_hidden_states=True, return_dict=True)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/seonho/.cache/huggingface/modules/transformers_modules/eagle2hg_hyphen_processor_hyphen_groot_hyphen_n1p5/modeling_eagle2_5_vl.py", line 252, in forward
+    outputs = self.language_model(
+              ^^^^^^^^^^^^^^^^^^^^
+  File "/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/peft/peft_model.py", line 1923, in forward
+    return self.base_model(
+           ^^^^^^^^^^^^^^^^
+  File "/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/peft/tuners/tuners_utils.py", line 311, in forward
+    return self.model.forward(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/transformers/utils/generic.py", line 843, in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/transformers/models/qwen3/modeling_qwen3.py", line 520, in forward
+    logits = self.lm_head(hidden_states[:, slice_indices, :])
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1751, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1762, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/torch/nn/modules/linear.py", line 125, in forward
+    return F.linear(input, self.weight, self.bias)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 7.70 GiB. GPU 0 has a total capacity of 79.15 GiB of which 2.37 GiB is free. Including non-PyTorch memory, this process has 62.50 GiB memory in use. Process 914356 has 14.25 GiB memory in use. Of the allocated memory 54.27 GiB is allocated by PyTorch, and 7.72 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)
+[1;34mwandb[0m: 
+[1;34mwandb[0m: 🚀 View run [33msplendid-bird-7[0m at: [34mhttps://wandb.ai/RwHlabs/groot_mgd/runs/gzirp1m0[0m
+[1;34mwandb[0m: Find logs at: [1;35m../../groot_robocasa/groot_target_mgd_lora_only/wandb/run-20260506_155023-gzirp1m0/logs[0m
+WARNING:lerobot.configs.policies:Device 'None' is not available. Switching to 'cuda'.
+wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from /home/seonho/.netrc.
+wandb: Currently logged in as: junhyeong to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: setting up run 3hj1o7ws
+wandb: Tracking run with wandb version 0.24.2
+wandb: Run data is saved locally in /home/seonho/groot_robocasa/groot_target_mgd_lora_only/wandb/run-20260506_162357-3hj1o7ws
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run bright-haze-8
+wandb: ⭐️ View project at https://wandb.ai/RwHlabs/groot_mgd
+wandb: 🚀 View run at https://wandb.ai/RwHlabs/groot_mgd/runs/3hj1o7ws
+[GROOT] Flash Attention version: 2.8.3
+Loading pretrained dual brain from nvidia/GR00T-N1.5-3B
+Tune backbone vision tower: False
+Tune backbone LLM: False
+Tune action head projector: True
+Tune action head DiT: True
+LoRA enabled: rank=8, alpha=16, dropout=0.05
+Fetching 13 files:   0%|          | 0/13 [00:00<?, ?it/s]Fetching 13 files: 100%|██████████| 13/13 [00:00<00:00, 37016.94it/s]
+`torch_dtype` is deprecated! Use `dtype` instead!
+WARNING:lerobot.policies.groot_mgd.modeling_groot:After loading groot_pretrained_path, missing keys (303): ['backbone.eagle_model.language_model.base_model.model.model.embed_tokens.weight', 'backbone.eagle_model.language_model.base_model.model.model.layers.0.self_attn.q_proj.base_layer.weight', 'backbone.eagle_model.language_model.base_model.model.model.layers.0.self_attn.q_proj.lora_A.default.weight'] ...
+WARNING:lerobot.policies.groot_mgd.modeling_groot:After loading groot_pretrained_path, unexpected keys (134): ['backbone.eagle_model.language_model.lm_head.weight', 'backbone.eagle_model.language_model.model.layers.0.input_layernorm.weight', 'backbone.eagle_model.language_model.model.layers.0.mlp.down_proj.weight'] ...
+[GROOT] Copying vendor Eagle files to cache: /home/seonho/clvla/lerobot_cl/src/lerobot/policies/groot_mgd/eagle2_hg_model -> /home/seonho/.cache/huggingface/lerobot/lerobot/eagle2hg-processor-groot-n1p5
+[GROOT] Assets repo: lerobot/eagle2hg-processor-groot-n1p5 
+ Cache dir: /home/seonho/.cache/huggingface/lerobot/lerobot/eagle2hg-processor-groot-n1p5
+Tune backbone llm: False
+Tune backbone visual: True
+Total number of DiT parameters:  550386688
+Total number of SelfAttentionTransformer parameters:  201433088
+Tune action head projector: True
+Tune action head diffusion model: True
+Tune backbone llm: False
+Tune backbone visual: False
+Warning: No backbone trainable parameters found.
+Tune action head projector: True
+Tune action head diffusion model: True
+trainable params: 3,735,552 || all params: 918,410,240 || trainable%: 0.4067
+/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/torchvision/io/_video_deprecation_warning.py:5: UserWarning: The video decoding and encoding capabilities of torchvision are deprecated from version 0.22 and will be removed in version 0.24. We recommend that you migrate to TorchCodec, where we'll consolidate the future decoding/encoding capabilities of PyTorch: https://github.com/pytorch/torchcodec
+  warnings.warn(
+/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/torchvision/io/_video_deprecation_warning.py:5: UserWarning: The video decoding and encoding capabilities of torchvision are deprecated from version 0.22 and will be removed in version 0.24. We recommend that you migrate to TorchCodec, where we'll consolidate the future decoding/encoding capabilities of PyTorch: https://github.com/pytorch/torchcodec
+  warnings.warn(
+/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/torchvision/io/_video_deprecation_warning.py:5: UserWarning: The video decoding and encoding capabilities of torchvision are deprecated from version 0.22 and will be removed in version 0.24. We recommend that you migrate to TorchCodec, where we'll consolidate the future decoding/encoding capabilities of PyTorch: https://github.com/pytorch/torchcodec
+  warnings.warn(
+/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/torchvision/io/_video_deprecation_warning.py:5: UserWarning: The video decoding and encoding capabilities of torchvision are deprecated from version 0.22 and will be removed in version 0.24. We recommend that you migrate to TorchCodec, where we'll consolidate the future decoding/encoding capabilities of PyTorch: https://github.com/pytorch/torchcodec
+  warnings.warn(
+`use_fast` is set to `True` but the image processor class does not have a fast version.  Falling back to the slow version.
+The tokenizer you are loading from '/home/seonho/.cache/huggingface/lerobot/lerobot/eagle2hg-processor-groot-n1p5' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
+The tokenizer you are loading from '/home/seonho/.cache/huggingface/lerobot/lerobot/eagle2hg-processor-groot-n1p5' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
+WARNING:lerobot.configs.policies:Device 'None' is not available. Switching to 'cuda'.
+wandb: [wandb.login()] Loaded credentials for https://api.wandb.ai from /home/seonho/.netrc.
+wandb: Currently logged in as: junhyeong to https://api.wandb.ai. Use `wandb login --relogin` to force relogin
+wandb: setting up run vmvc3ji5
+wandb: Tracking run with wandb version 0.24.2
+wandb: Run data is saved locally in /home/seonho/groot_robocasa/groot_target_mgd_lora_only/wandb/run-20260506_165610-vmvc3ji5
+wandb: Run `wandb offline` to turn off syncing.
+wandb: Syncing run good-lion-9
+wandb: ⭐️ View project at https://wandb.ai/RwHlabs/groot_mgd
+wandb: 🚀 View run at https://wandb.ai/RwHlabs/groot_mgd/runs/vmvc3ji5
+[GROOT] Flash Attention version: 2.8.3
+Loading pretrained dual brain from nvidia/GR00T-N1.5-3B
+Tune backbone vision tower: False
+Tune backbone LLM: False
+Tune action head projector: True
+Tune action head DiT: True
+LoRA enabled: rank=8, alpha=16, dropout=0.05
+Fetching 13 files:   0%|          | 0/13 [00:00<?, ?it/s]Fetching 13 files: 100%|██████████| 13/13 [00:00<00:00, 32206.71it/s]
+`torch_dtype` is deprecated! Use `dtype` instead!
+WARNING:lerobot.policies.groot_mgd.modeling_groot:After loading groot_pretrained_path, missing keys (303): ['backbone.eagle_model.language_model.base_model.model.model.embed_tokens.weight', 'backbone.eagle_model.language_model.base_model.model.model.layers.0.self_attn.q_proj.base_layer.weight', 'backbone.eagle_model.language_model.base_model.model.model.layers.0.self_attn.q_proj.lora_A.default.weight'] ...
+WARNING:lerobot.policies.groot_mgd.modeling_groot:After loading groot_pretrained_path, unexpected keys (134): ['backbone.eagle_model.language_model.lm_head.weight', 'backbone.eagle_model.language_model.model.layers.0.input_layernorm.weight', 'backbone.eagle_model.language_model.model.layers.0.mlp.down_proj.weight'] ...
+[GROOT] Copying vendor Eagle files to cache: /home/seonho/clvla/lerobot_cl/src/lerobot/policies/groot_mgd/eagle2_hg_model -> /home/seonho/.cache/huggingface/lerobot/lerobot/eagle2hg-processor-groot-n1p5
+[GROOT] Assets repo: lerobot/eagle2hg-processor-groot-n1p5 
+ Cache dir: /home/seonho/.cache/huggingface/lerobot/lerobot/eagle2hg-processor-groot-n1p5
+Tune backbone llm: False
+Tune backbone visual: True
+Total number of DiT parameters:  550386688
+Total number of SelfAttentionTransformer parameters:  201433088
+Tune action head projector: True
+Tune action head diffusion model: True
+Tune backbone llm: False
+Tune backbone visual: False
+Warning: No backbone trainable parameters found.
+Tune action head projector: True
+Tune action head diffusion model: True
+trainable params: 3,735,552 || all params: 918,410,240 || trainable%: 0.4067
+/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/torchvision/io/_video_deprecation_warning.py:5: UserWarning: The video decoding and encoding capabilities of torchvision are deprecated from version 0.22 and will be removed in version 0.24. We recommend that you migrate to TorchCodec, where we'll consolidate the future decoding/encoding capabilities of PyTorch: https://github.com/pytorch/torchcodec
+  warnings.warn(
+/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/torchvision/io/_video_deprecation_warning.py:5: UserWarning: The video decoding and encoding capabilities of torchvision are deprecated from version 0.22 and will be removed in version 0.24. We recommend that you migrate to TorchCodec, where we'll consolidate the future decoding/encoding capabilities of PyTorch: https://github.com/pytorch/torchcodec
+  warnings.warn(
+/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/torchvision/io/_video_deprecation_warning.py:5: UserWarning: The video decoding and encoding capabilities of torchvision are deprecated from version 0.22 and will be removed in version 0.24. We recommend that you migrate to TorchCodec, where we'll consolidate the future decoding/encoding capabilities of PyTorch: https://github.com/pytorch/torchcodec
+  warnings.warn(
+/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/torchvision/io/_video_deprecation_warning.py:5: UserWarning: The video decoding and encoding capabilities of torchvision are deprecated from version 0.22 and will be removed in version 0.24. We recommend that you migrate to TorchCodec, where we'll consolidate the future decoding/encoding capabilities of PyTorch: https://github.com/pytorch/torchcodec
+  warnings.warn(
+`use_fast` is set to `True` but the image processor class does not have a fast version.  Falling back to the slow version.
+The tokenizer you are loading from '/home/seonho/.cache/huggingface/lerobot/lerobot/eagle2hg-processor-groot-n1p5' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
+The tokenizer you are loading from '/home/seonho/.cache/huggingface/lerobot/lerobot/eagle2hg-processor-groot-n1p5' with an incorrect regex pattern: https://huggingface.co/mistralai/Mistral-Small-3.1-24B-Instruct-2503/discussions/84#69121093e8b480e709447d5e. This will lead to incorrect tokenization. You should set the `fix_mistral_regex=True` flag when loading this tokenizer to fix this issue.
+wandb: Adding directory to artifact (/home/seonho/groot_robocasa/groot_target_mgd_lora_only/checkpoints/020000)... Done. 15.8s
+wandb: Adding directory to artifact (/home/seonho/groot_robocasa/groot_target_mgd_lora_only/checkpoints/040000)... Traceback (most recent call last):
+  File "/home/seonho/clvla/lerobot_cl/scripts/train_groot_mgd.py", line 7, in <module>
+    main()
+  File "/home/seonho/clvla/lerobot_cl/src/lerobot/configs/parser.py", line 233, in wrapper_inner
+    response = fn(cfg, *args, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/seonho/clvla/lerobot_cl/src/lerobot/scripts/train_groot_mgd.py", line 400, in main
+    artifact.add_dir(str(checkpoint_dir))
+  File "/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/wandb/sdk/artifacts/_validators.py", line 271, in wrapper
+    return method(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/wandb/sdk/artifacts/artifact.py", line 1563, in add_dir
+    pool.starmap(add_manifest_file, paths)
+  File "/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/multiprocessing/pool.py", line 375, in starmap
+    return self._map_async(func, iterable, starmapstar, chunksize).get()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/multiprocessing/pool.py", line 774, in get
+    raise self._value
+  File "/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/multiprocessing/pool.py", line 125, in worker
+    result = (True, func(*args, **kwds))
+                    ^^^^^^^^^^^^^^^^^^^
+  File "/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/multiprocessing/pool.py", line 51, in starmapstar
+    return list(itertools.starmap(args[0], args[1]))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/wandb/sdk/artifacts/artifact.py", line 1553, in add_manifest_file
+    self._add_local_file(
+  File "/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/site-packages/wandb/sdk/artifacts/artifact.py", line 1770, in _add_local_file
+    shutil.copyfile(path, staging_path)
+  File "/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/shutil.py", line 273, in copyfile
+    _fastcopy_sendfile(fsrc, fdst)
+  File "/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/shutil.py", line 164, in _fastcopy_sendfile
+    raise err from None
+  File "/home/seonho/miniconda3/envs/lerobot050_groot/lib/python3.12/shutil.py", line 150, in _fastcopy_sendfile
+    sent = os.sendfile(outfd, infd, offset, blocksize)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+OSError: [Errno 28] No space left on device: '/home/seonho/groot_robocasa/groot_target_mgd_lora_only/checkpoints/040000/pretrained_model/model.safetensors' -> '/home/seonho/.local/share/wandb/artifacts/staging/tmp0kb934q_'
+[1;34mwandb[0m: 
+[1;34mwandb[0m: 🚀 View run [33mgood-lion-9[0m at: [34mhttps://wandb.ai/RwHlabs/groot_mgd/runs/vmvc3ji5[0m
+[1;34mwandb[0m: Find logs at: [1;35m../../groot_robocasa/groot_target_mgd_lora_only/wandb/run-20260506_165610-vmvc3ji5/logs[0m

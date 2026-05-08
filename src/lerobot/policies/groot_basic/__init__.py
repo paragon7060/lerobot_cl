@@ -15,20 +15,7 @@
 # limitations under the License.
 
 from .configuration_groot import GrootConfig
-
-
-def make_groot_pre_post_processors(*args, **kwargs):
-    from .processor_groot import make_groot_pre_post_processors as _impl
-
-    return _impl(*args, **kwargs)
-
-
-def __getattr__(name):
-    if name == "GrootPolicy":
-        from .modeling_groot import GrootPolicy
-
-        return GrootPolicy
-    raise AttributeError(name)
-
+from .modeling_groot import GrootPolicy
+from .processor_groot import make_groot_pre_post_processors
 
 __all__ = ["GrootConfig", "GrootPolicy", "make_groot_pre_post_processors"]

@@ -223,6 +223,17 @@ class GrootMGDPolicy(PreTrainedPolicy):
                     "Did you set policy.lora_rank > 0?"
                 )
             return
+        if mode == "dit_only":
+            # Freeze everything (LoRA weights stay frozen but still contribute to forward pass).
+            for p in self.parameters():
+                p.requires_grad_(False)
+            # Open the entire action_head (vlln + vl_self_attention + DiT core).
+            for p in self._groot_model.action_head.parameters():
+                p.requires_grad_(True)
+            # Keep action_encoder frozen — it was the MGD target path and is not needed for FM.
+            for p in self._groot_model.action_head.action_encoder.parameters():
+                p.requires_grad_(False)
+            return
         raise ValueError(f"Unsupported mgd_trainable_mode: {mode!r}")
 
     def _log_mgd_setup(self) -> None:

@@ -16,17 +16,15 @@
 
 from dataclasses import dataclass, field
 
-from lerobot.configs.policies import PreTrainedConfig
-from lerobot.configs.types import FeatureType, NormalizationMode, PolicyFeature
-from lerobot.optim.optimizers import AdamWConfig
-from lerobot.optim.schedulers import CosineDecayWithWarmupSchedulerConfig
+from lerobot.configs import FeatureType, NormalizationMode, PolicyFeature, PreTrainedConfig
+from lerobot.optim import AdamWConfig, CosineDecayWithWarmupSchedulerConfig
 from lerobot.utils.constants import ACTION, OBS_STATE
 
 
-@PreTrainedConfig.register_subclass("groot_mgd")
+@PreTrainedConfig.register_subclass("groot_basic")
 @dataclass
-class GrootMGDConfig(PreTrainedConfig):
-    """Configuration for Groot-MGD policy wrapper."""
+class GrootConfig(PreTrainedConfig):
+    """Configuration for Groot policy wrapper."""
 
     # Basic policy settings
     n_obs_steps: int = 1
@@ -90,9 +88,6 @@ class GrootMGDConfig(PreTrainedConfig):
     # Whether to use the full model for LORA
     lora_full_model: bool = False
 
-    # Which component to apply LoRA to: "llm" | "vision" | "both"
-    lora_target: str = "llm"
-
     # Training parameters (matching groot_finetune_script.py)
     optimizer_lr: float = 1e-4
     optimizer_betas: tuple[float, float] = (0.95, 0.999)
@@ -121,42 +116,12 @@ class GrootMGDConfig(PreTrainedConfig):
     report_to: str = "wandb"
     resume: bool = False
 
-    # MGD settings
-    mgd_enabled: bool = True
-    mgd_loss_weight: float = 0.05
-    mgd_fm_loss_weight: float = 1.0
-    mgd_mask_ratio: float = 0.0
-    mgd_target_dim: int = 512
-    mgd_hidden_dim: int = 512
-    mgd_target_pooling: str = "flatten"  # "flatten" | "mean"
-    mgd_target_projection: str = "frozen_random"  # "frozen_random" | "pretrained_ae"
-    mgd_pretrained_projector_path: str | None = None
-    mgd_use_cosine_loss: bool = True
-    mgd_use_mse_loss: bool = False
-    mgd_preserve_weight: float = 0.0
-    mgd_backprop_backbone: bool = True
-    mgd_backprop_action_target_projector: bool = False
-    mgd_trainable_mode: str = "default"  # "default" | "head_only" | "lora_only"
-    groot_pretrained_path: str | None = None
-    vlm_drift_logging_enabled: bool = True
-
     def __post_init__(self):
         super().__post_init__()
 
         if self.n_action_steps > self.chunk_size:
             raise ValueError(
                 f"n_action_steps ({self.n_action_steps}) cannot exceed chunk_size ({self.chunk_size})"
-            )
-
-        if self.lora_rank > 0 and self.lora_target not in ("llm", "vision", "both"):
-            raise ValueError(
-                f"lora_target must be 'llm', 'vision', or 'both', got {self.lora_target!r}"
-            )
-
-        if self.mgd_trainable_mode not in ("default", "head_only", "lora_only", "dit_only"):
-            raise ValueError(
-                "mgd_trainable_mode must be 'default', 'head_only', 'lora_only', or 'dit_only', "
-                f"got {self.mgd_trainable_mode!r}"
             )
 
     def validate_features(self) -> None:
@@ -210,27 +175,20 @@ class GrootMGDConfig(PreTrainedConfig):
     def get_scheduler_preset(self) -> CosineDecayWithWarmupSchedulerConfig:
         """Return scheduler configuration."""
         return CosineDecayWithWarmupSchedulerConfig(
-            num_warmup_steps=int(10000 * self.warmup_ratio),  # 5% warmup by default
-            num_decay_steps=10000,  # Adjust based on training steps
+            num_warmup_steps=int(10000 * self.warmup_ratio),
+            num_decay_steps=10000,
             peak_lr=self.optimizer_lr,
             decay_lr=self.optimizer_lr * 0.1,
         )
 
     @property
     def observation_delta_indices(self) -> None:
-        """Return indices for delta observations (None for Groot)."""
         return None
 
     @property
     def action_delta_indices(self) -> list[int]:
-        """Return indices for delta actions."""
         return list(range(min(self.chunk_size, 16)))
 
     @property
     def reward_delta_indices(self) -> None:
-        """Return indices for delta rewards (None for Groot)."""
         return None
-
-
-# Backward-compat alias
-GrootConfig = GrootMGDConfig
