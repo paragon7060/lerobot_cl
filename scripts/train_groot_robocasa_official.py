@@ -51,6 +51,7 @@ from lerobot.policies.groot_common import (
     build_official_dataset,
     ensure_isaac_gr00t_on_path,
     forward_with_groot_batch,
+    resolve_dataset_soup,
     run_parity_smoke_test,
     unwrap_groot_model,
 )
@@ -69,6 +70,9 @@ class GrootOfficialTrainConfig:
 
     # --- Policy selection (LeRobot-side) ---
     policy: Optional[PreTrainedConfig] = None
+
+    # Fallback soup used when `dataset_paths` is not provided.
+    dataset_soup: str = "pretrain_human300"
 
     # --- Dataset paths (Isaac-GR00T side) ---
     # Each entry is a directory containing meta/, data/, videos/. Multiple paths
@@ -245,14 +249,18 @@ def _propagate_tune_and_lora_flags(cfg: GrootOfficialTrainConfig) -> None:
 def main(cfg: GrootOfficialTrainConfig) -> None:
     if cfg.policy is None:
         raise ValueError("--policy.type must be set (groot_robocasa | groot_cl | groot_mgd | groot_cl_v2).")
-    if not cfg.dataset_paths:
-        raise ValueError("--dataset_paths must contain at least one entry.")
+    if cfg.dataset_paths:
+        dataset_paths = list(cfg.dataset_paths)
+        filter_keys = [None] * len(dataset_paths)
+    else:
+        dataset_paths, filter_keys = resolve_dataset_soup(cfg.dataset_soup)
 
     if cfg.smoke_test:
         cfg.max_steps = 2
         cfg.batch_size = min(cfg.batch_size, 2)
         cfg.dataloader_num_workers = 0
-        cfg.dataset_paths = cfg.dataset_paths[:1]
+        dataset_paths = dataset_paths[:1]
+        filter_keys = filter_keys[:1]
         cfg.save_steps = cfg.max_steps  # save at end to verify both formats
         logger.info("[smoke_test] forcing max_steps=2, batch_size<=2, num_workers=0, single dataset")
 
@@ -286,22 +294,24 @@ def main(cfg: GrootOfficialTrainConfig) -> None:
     if accelerator.is_main_process:
         logger.info("Output dir: %s", cfg.output_dir)
         logger.info("Policy: --policy.type=%s", cfg.policy.type)
-        logger.info("Dataset paths (%d): %s", len(cfg.dataset_paths), cfg.dataset_paths)
+        logger.info("Dataset soup: %s", cfg.dataset_soup)
+        logger.info("Dataset paths (%d): %s", len(dataset_paths), dataset_paths)
         logger.info("Accelerator: num_processes=%d, device=%s", accelerator.num_processes, device)
 
     # 3) Parity smoke test BEFORE building the full training stack so failure
     #    is fast and obvious.
     if cfg.smoke_test and accelerator.is_main_process:
         logger.info("[smoke_test] running batch parity check (reference vs adapter) …")
-        report = run_parity_smoke_test(cfg.dataset_paths[0], preset=preset)
+        report = run_parity_smoke_test(dataset_paths[0], preset=preset)
         logger.info(report.summary())
         if not report.ok:
             raise RuntimeError("Batch parity check failed; aborting.")
 
     # 4) Build the official dataset + DataLoader.
     dataset = build_official_dataset(
-        cfg.dataset_paths,
+        dataset_paths,
         preset=preset,
+        filter_keys=filter_keys,
         ds_weights_alpha=cfg.ds_weights_alpha,
         balance_dataset_weights=cfg.balance_dataset_weights,
         balance_trajectory_weights=cfg.balance_trajectory_weights,
@@ -369,7 +379,9 @@ def main(cfg: GrootOfficialTrainConfig) -> None:
             config={
                 "policy_type": cfg.policy.type,
                 "base_model_path": cfg.policy.base_model_path,
-                "dataset_paths": cfg.dataset_paths,
+                "dataset_soup": cfg.dataset_soup,
+                "dataset_paths": dataset_paths,
+                "filter_keys": filter_keys,
                 "batch_size": cfg.batch_size,
                 "max_steps": cfg.max_steps,
                 "learning_rate": cfg.learning_rate,

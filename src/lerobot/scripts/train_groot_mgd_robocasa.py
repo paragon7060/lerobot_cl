@@ -164,6 +164,11 @@ def main(cfg: GrootMGDTrainConfig) -> None:
     )
     delta_timestamps = resolve_delta_timestamps(cfg.policy, first_ds_meta)
 
+    if accelerator.is_main_process and cfg.data_split == "pretrain":
+        logger.info(
+            "Using presliced dataset root; no extra episode slicing will be applied in train script."
+        )
+
     if accelerator.is_main_process:
         dataset = MultiLeRobotDataset(
             repo_ids=repo_ids,

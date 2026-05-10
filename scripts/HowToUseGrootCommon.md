@@ -19,6 +19,7 @@
 - training adapter
 - config drift assert
 - `robocasa_official_runtime.py`
+- `filter_key_subset.py`
 
 역할 분리는 아래처럼 유지한다.
 
@@ -41,6 +42,7 @@ train script
 - optional training adapter helper
 - config drift 검증
 - v3 runtime repo discovery helper
+- official-style `filter_key` subset helper
 
 ## What `groot_common` Is Not
 
@@ -80,6 +82,12 @@ train script
 `robocasa_official_dataset.py`
 
 - legacy validation helper only
+
+`filter_key_subset.py`
+
+- official과 같은 `filter_key` subset 규칙을 v3 runtime dataset에도 재사용하는 helper
+- `subset_<split>_<filter_key>_seed<seed>.json` manifest를 dataset root에 캐시하고 재사용한다.
+- 학습 런타임에서는 이미 materialize된 presliced dataset root를 그냥 쓰면 되며, 이 util은 주로 one-time subset 생성/검증에 사용한다.
 
 ## Recommended Train Script Flow
 
@@ -242,6 +250,16 @@ loss = outputs["loss"]
 - `runtime.py`는 `v1.0` 원본 split을 읽는 용도가 아니다.
 - `runtime.py`는 `robocasa_human_v3` 같은 변환된 v3 layout만 대상으로 한다.
 - `runtime.py`의 결과를 `MultiLeRobotDataset`에 넘겨 train-ready repo list로 사용한다.
+
+## Train Script Usage
+
+`train_groot_mgd_robocasa.py`에서는 이제 `robocasa_human_v3_presliced_100` 같은 **official-equivalent presliced root**를 그대로 쓰면 된다.
+
+즉 학습 시에는:
+
+- `--dataset.root=/home/seonho/groot_robocasa/robocasa_dataset/robocasa_human_v3_presliced_100`
+- `train script`는 별도의 `filter_key` 해석이나 episode slicing을 하지 않는다.
+- `groot_common.filter_key_subset`은 필요한 경우 새 presliced root를 만들거나 검증할 때만 사용한다.
 
 ## Summary
 

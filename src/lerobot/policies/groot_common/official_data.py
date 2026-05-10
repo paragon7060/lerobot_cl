@@ -69,6 +69,32 @@ def ensure_isaac_gr00t_on_path() -> Path:
     )
 
 
+_DATASET_SOUP_ALIASES = {
+    "pretrain_50": "pretrain_human50",
+    "pretrain_100": "pretrain_human100",
+    "pretrain_200": "pretrain_human200_mg60",
+    "pretrain_300": "pretrain_human300",
+}
+
+
+def resolve_dataset_soup(dataset_soup: str) -> tuple[list[str], list[str | None]]:
+    """Resolve a Robocasa dataset soup name to dataset paths and filter keys."""
+    canonical_name = _DATASET_SOUP_ALIASES.get(dataset_soup, dataset_soup)
+    from robocasa.utils.dataset_registry import DATASET_SOUP_REGISTRY
+
+    if canonical_name not in DATASET_SOUP_REGISTRY:
+        available = ", ".join(sorted(DATASET_SOUP_REGISTRY.keys()))
+        raise ValueError(
+            f"Unknown dataset_soup '{dataset_soup}' (canonical '{canonical_name}'). "
+            f"Available values: {available}"
+        )
+
+    entries = DATASET_SOUP_REGISTRY[canonical_name]
+    dataset_paths = [str(entry["path"]) for entry in entries]
+    filter_keys = [entry.get("filter_key") for entry in entries]
+    return dataset_paths, filter_keys
+
+
 def _build_single_dataset(
     dataset_path: str | Path,
     *,
