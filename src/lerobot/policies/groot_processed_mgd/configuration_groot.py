@@ -138,7 +138,7 @@ class GrootMGDConfig(PreTrainedConfig):
     mgd_preserve_weight: float = 0.0
     mgd_backprop_backbone: bool = True
     mgd_backprop_action_target_projector: bool = False
-    mgd_trainable_mode: str = "processed_only"  # "default" | "head_only" | "lora_only" | "processed_only"
+    mgd_trainable_mode: str = "processed_only"  # "default" | "head_only" | "lora_only" | "processed_only" | "dit_core_only"
     groot_pretrained_path: str | None = None
     vlm_drift_logging_enabled: bool = True
 
@@ -155,9 +155,17 @@ class GrootMGDConfig(PreTrainedConfig):
                 f"lora_target must be 'llm', 'vision', or 'both', got {self.lora_target!r}"
             )
 
-        if self.mgd_trainable_mode not in ("default", "head_only", "lora_only", "dit_only", "processed_only"):
+        if self.mgd_trainable_mode not in (
+            "default",
+            "head_only",
+            "lora_only",
+            "dit_only",
+            "processed_only",
+            "dit_core_only",
+        ):
             raise ValueError(
-                "mgd_trainable_mode must be 'default', 'head_only', 'lora_only', 'dit_only', or 'processed_only', "
+                "mgd_trainable_mode must be 'default', 'head_only', 'lora_only', 'dit_only', "
+                "'processed_only', or 'dit_core_only', "
                 f"got {self.mgd_trainable_mode!r}"
             )
 

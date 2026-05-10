@@ -35,6 +35,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dataset-root", default="/home/seonho/groot_robocasa/robocasa_dataset/slicing_robocasa_human_v3")
     ap.add_argument("--groot-pretrained-path", default="/home/seonho/ws3/outputs/groot_inst/checkpoints/050000/pretrained_model")
+    ap.add_argument("--mgd-trainable-mode", default="processed_only")
+    ap.add_argument("--mgd-enabled", type=lambda x: str(x).lower() == "true", default=True)
+    ap.add_argument("--mgd-loss-weight", type=float, default=0.05)
     ap.add_argument("--max-tasks", type=int, default=8)
     ap.add_argument("--batch-size", type=int, default=1)
     ap.add_argument("--token-mask-ratio", type=float, default=0.1)
@@ -53,13 +56,13 @@ def main():
         device="cuda",
         base_model_path="nvidia/GR00T-N1.5-3B",
         groot_pretrained_path=args.groot_pretrained_path,
-        mgd_trainable_mode="processed_only",
-        mgd_enabled=True,
+        mgd_trainable_mode=args.mgd_trainable_mode,
+        mgd_enabled=args.mgd_enabled,
         mgd_backprop_backbone=True,
         mgd_target_projection="frozen_random",
         mgd_target_pooling="flatten",
         mgd_token_mask_ratio=args.token_mask_ratio,
-        mgd_loss_weight=0.05,
+        mgd_loss_weight=args.mgd_loss_weight,
         mgd_fm_loss_weight=1.0,
         tune_llm=False,
         tune_visual=False,
@@ -166,15 +169,14 @@ def main():
     peak_mem_gb = torch.cuda.max_memory_allocated() / (1024**3)
 
     # 9) loss_dict required keys.
-    required_keys = [
-        "loss",
-        "flow_matching_loss",
-        "mgd_loss",
-        "mgd_cos_sim",
-        "valid_token_count",
-        "kept_token_count",
-        "actual_token_mask_ratio",
-    ]
+    required_keys = ["loss", "flow_matching_loss", "mgd_loss"]
+    if args.mgd_enabled:
+        required_keys += [
+            "mgd_cos_sim",
+            "valid_token_count",
+            "kept_token_count",
+            "actual_token_mask_ratio",
+        ]
     missing = [k for k in required_keys if k not in loss_dict]
 
     # 6) trainable parameter grouping.
@@ -187,14 +189,23 @@ def main():
 
     vlln_total, vlln_train = group_count("_groot_model.action_head.vlln")
     vlsa_total, vlsa_train = group_count("_groot_model.action_head.vl_self_attention")
+    dit_total, dit_train = group_count("_groot_model.action_head.model")
     seq_total, seq_train = group_count("sequence_mgd_head")
+    ae_total, ae_train = group_count("_groot_model.action_head.action_encoder")
+    proj_total, proj_train = group_count("action_target_projector")
+    raw_total, raw_train = group_count("_groot_model.backbone")
     whole_total = sum(p.numel() for _, p in all_named)
     whole_train = sum(p.numel() for _, p in all_named if p.requires_grad)
-    selected_prefixes = (
-        "_groot_model.action_head.vlln",
-        "_groot_model.action_head.vl_self_attention",
-        "sequence_mgd_head",
-    )
+    if args.mgd_trainable_mode == "processed_only":
+        selected_prefixes = (
+            "_groot_model.action_head.vlln",
+            "_groot_model.action_head.vl_self_attention",
+            "sequence_mgd_head",
+        )
+    elif args.mgd_trainable_mode == "dit_core_only":
+        selected_prefixes = ("_groot_model.action_head.model",)
+    else:
+        selected_prefixes = tuple()
     other_train = sum(
         p.numel() for n, p in all_named if p.requires_grad and not n.startswith(selected_prefixes)
     )
@@ -229,9 +240,14 @@ def main():
     proj_bad = grad_not_none("action_target_projector")
 
     # 5) TokenMask behavior checks.
-    valid_only_masking = bool(((~capture["valid_mask"]) & capture["keep_mask"]).sum().item() == 0)
-    keep_mask_passed = torch.equal(capture["keep_mask"], capture["seq_keep_mask_arg"])
-    valid_mask_passed = torch.equal(capture["valid_mask"], capture["seq_valid_mask_arg"])
+    if args.mgd_enabled:
+        valid_only_masking = bool(((~capture["valid_mask"]) & capture["keep_mask"]).sum().item() == 0)
+        keep_mask_passed = torch.equal(capture["keep_mask"], capture["seq_keep_mask_arg"])
+        valid_mask_passed = torch.equal(capture["valid_mask"], capture["seq_valid_mask_arg"])
+    else:
+        valid_only_masking = None
+        keep_mask_passed = None
+        valid_mask_passed = None
 
     print(f"[SHAPE] z_A_hat={capture.get('z_a_hat_shape')}")
     print(f"[SHAPE] z_A_target={capture.get('z_a_target_shape')}")
@@ -242,7 +258,11 @@ def main():
 
     print(f"[PARAM] vlln total/train={vlln_total}/{vlln_train}")
     print(f"[PARAM] vl_self_attention total/train={vlsa_total}/{vlsa_train}")
+    print(f"[PARAM] dit_core total/train={dit_total}/{dit_train}")
     print(f"[PARAM] sequence_mgd_head total/train={seq_total}/{seq_train}")
+    print(f"[PARAM] action_encoder total/train={ae_total}/{ae_train}")
+    print(f"[PARAM] target_projector total/train={proj_total}/{proj_train}")
+    print(f"[PARAM] raw_backbone total/train={raw_total}/{raw_train}")
     print(f"[PARAM] other_trainable={other_train}")
     print(f"[PARAM] whole total/train={whole_total}/{whole_train}")
 

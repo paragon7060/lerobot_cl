@@ -358,6 +358,7 @@ class GR00TN15(PreTrainedModel):
         tune_llm = kwargs.pop("tune_llm", False)
         tune_projector = kwargs.pop("tune_projector", True)
         tune_diffusion_model = kwargs.pop("tune_diffusion_model", True)
+        mgd_trainable_mode = kwargs.pop("mgd_trainable_mode", "processed_only")
         lora_rank = kwargs.pop("lora_rank", 0)
         lora_alpha = kwargs.pop("lora_alpha", 16)
         lora_dropout = kwargs.pop("lora_dropout", 0.05)
@@ -404,6 +405,7 @@ class GR00TN15(PreTrainedModel):
         pretrained_model.action_head.set_trainable_parameters(
             tune_projector=tune_projector, tune_diffusion_model=tune_diffusion_model
         )
+        pretrained_model.action_head.config.mgd_trainable_mode = mgd_trainable_mode
 
         if lora_rank > 0:
             pretrained_model.backbone.eagle_model.wrap_llm_lora(

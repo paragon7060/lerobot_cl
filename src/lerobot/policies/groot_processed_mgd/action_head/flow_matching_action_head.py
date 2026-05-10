@@ -149,6 +149,7 @@ class FlowmatchingActionHeadConfig(PretrainedConfig):
     freeze_decode_layer: bool = field(default=False)
     expand_batch: int = field(default=None)
     use_vlln: bool = field(default=True)
+    mgd_trainable_mode: str = field(default="processed_only")
 
     vl_self_attention_cfg: dict = field(default=None)
     num_target_vision_tokens: int = field(default=32, metadata={"help": "Number of target vision tokens."})
@@ -242,6 +243,16 @@ class FlowmatchingActionHead(nn.Module):
         need to call model.eval() for the frozen modules.
         """
         if self.training:
+            mode = getattr(self.config, "mgd_trainable_mode", None)
+            if mode == "dit_core_only":
+                self.vlln.eval()
+                self.vl_self_attention.eval()
+                self.state_encoder.eval()
+                self.action_encoder.eval()
+                self.action_decoder.eval()
+                if self.config.add_pos_embed:
+                    self.position_embedding.eval()
+                return
             if not self.tune_projector:
                 self.state_encoder.eval()
                 self.action_encoder.eval()

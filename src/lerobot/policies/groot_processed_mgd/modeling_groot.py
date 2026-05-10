@@ -142,6 +142,7 @@ class GrootMGDPolicy(PreTrainedPolicy):
             tune_visual=self.config.tune_visual,
             tune_projector=self.config.tune_projector,
             tune_diffusion_model=self.config.tune_diffusion_model,
+            mgd_trainable_mode=self.config.mgd_trainable_mode,
             lora_rank=self.config.lora_rank,
             lora_alpha=self.config.lora_alpha,
             lora_dropout=self.config.lora_dropout,
@@ -318,6 +319,17 @@ class GrootMGDPolicy(PreTrainedPolicy):
             self.sequence_mgd_head.requires_grad_(True)
             self.action_target_projector.requires_grad_(False)
             return
+        if mode == "dit_core_only":
+            for p in self.parameters():
+                p.requires_grad_(False)
+
+            # Freeze the processed feature path and keep only the DiT core trainable.
+            self._groot_model.action_head.config.mgd_trainable_mode = "dit_core_only"
+            self._groot_model.action_head.tune_projector = False
+            self._groot_model.action_head.tune_diffusion_model = True
+            self._groot_model.action_head.model.requires_grad_(True)
+            self.action_target_projector.requires_grad_(False)
+            return
         if mode == "dit_only":
             # Freeze everything (LoRA weights stay frozen but still contribute to forward pass).
             for p in self.parameters():
@@ -325,6 +337,9 @@ class GrootMGDPolicy(PreTrainedPolicy):
             # Open the entire action_head (vlln + vl_self_attention + DiT core).
             for p in self._groot_model.action_head.parameters():
                 p.requires_grad_(True)
+            self._groot_model.action_head.config.mgd_trainable_mode = "dit_only"
+            self._groot_model.action_head.tune_projector = True
+            self._groot_model.action_head.tune_diffusion_model = True
             # Keep action_encoder frozen — it was the MGD target path and is not needed for FM.
             for p in self._groot_model.action_head.action_encoder.parameters():
                 p.requires_grad_(False)

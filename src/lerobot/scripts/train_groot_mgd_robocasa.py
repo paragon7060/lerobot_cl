@@ -120,6 +120,14 @@ def main(cfg: GrootMGDTrainConfig) -> None:
     dataset_root = Path(cfg.dataset.root)
     preset = make_robocasa_preset(video_backend=cfg.dataset.video_backend)
     apply_to_policy_config(cfg.policy, preset)
+    if cfg.policy.mgd_trainable_mode == "dit_core_only":
+        if cfg.policy.mgd_enabled or cfg.policy.mgd_loss_weight != 0.0:
+            logger.info(
+                "mgd_trainable_mode=dit_core_only detected. Forcing policy.mgd_enabled=false and "
+                "policy.mgd_loss_weight=0.0 (flow_matching-only stage)."
+            )
+        cfg.policy.mgd_enabled = False
+        cfg.policy.mgd_loss_weight = 0.0
     batch_builder = LeRobotNativeBatchBuilder(preset=preset)
 
     if cfg.data_split not in {"pretrain", "target", "real"}:
@@ -306,14 +314,38 @@ def main(cfg: GrootMGDTrainConfig) -> None:
 
         vlln_total, vlln_train = _group_count("_groot_model.action_head.vlln")
         vlsa_total, vlsa_train = _group_count("_groot_model.action_head.vl_self_attention")
+        dit_core_total, dit_core_train = _group_count("_groot_model.action_head.model")
         seq_total, seq_train = _group_count("sequence_mgd_head")
-        selected_train = vlln_train + vlsa_train + seq_train
-        selected_total = vlln_total + vlsa_total + seq_total
-        selected_prefixes = (
-            "_groot_model.action_head.vlln",
-            "_groot_model.action_head.vl_self_attention",
-            "sequence_mgd_head",
-        )
+        mode = cfg.policy.mgd_trainable_mode
+        if mode == "processed_only":
+            selected_train = vlln_train + vlsa_train + seq_train
+            selected_total = vlln_total + vlsa_total + seq_total
+            selected_prefixes = (
+                "_groot_model.action_head.vlln",
+                "_groot_model.action_head.vl_self_attention",
+                "sequence_mgd_head",
+            )
+        elif mode == "dit_core_only":
+            selected_train = dit_core_train
+            selected_total = dit_core_total
+            selected_prefixes = ("_groot_model.action_head.model",)
+        elif mode == "dit_only":
+            action_head_total, action_head_train = _group_count("_groot_model.action_head")
+            selected_train = action_head_train
+            selected_total = action_head_total
+            selected_prefixes = ("_groot_model.action_head",)
+        elif mode == "head_only":
+            selected_train = seq_train
+            selected_total = seq_total
+            selected_prefixes = ("sequence_mgd_head",)
+        else:
+            selected_train = vlln_train + vlsa_train + seq_train
+            selected_total = vlln_total + vlsa_total + seq_total
+            selected_prefixes = (
+                "_groot_model.action_head.vlln",
+                "_groot_model.action_head.vl_self_attention",
+                "sequence_mgd_head",
+            )
         other_trainable = sum(
             p.numel()
             for n, p in named_params
@@ -322,11 +354,14 @@ def main(cfg: GrootMGDTrainConfig) -> None:
 
         logger.info(
             "group_params: vlln total/train=%s/%s | vl_self_attention total/train=%s/%s | "
-            "sequence_mgd_head total/train=%s/%s | selected total/train=%s/%s | other_trainable=%s",
+            "dit_core total/train=%s/%s | sequence_mgd_head total/train=%s/%s | "
+            "selected total/train=%s/%s | other_trainable=%s",
             f"{vlln_total:,}",
             f"{vlln_train:,}",
             f"{vlsa_total:,}",
             f"{vlsa_train:,}",
+            f"{dit_core_total:,}",
+            f"{dit_core_train:,}",
             f"{seq_total:,}",
             f"{seq_train:,}",
             f"{selected_total:,}",
@@ -341,6 +376,8 @@ def main(cfg: GrootMGDTrainConfig) -> None:
             wandb.summary["params/vlln_trainable"] = int(vlln_train)
             wandb.summary["params/vl_self_attention_total"] = int(vlsa_total)
             wandb.summary["params/vl_self_attention_trainable"] = int(vlsa_train)
+            wandb.summary["params/dit_core_total"] = int(dit_core_total)
+            wandb.summary["params/dit_core_trainable"] = int(dit_core_train)
             wandb.summary["params/sequence_mgd_head_total"] = int(seq_total)
             wandb.summary["params/sequence_mgd_head_trainable"] = int(seq_train)
             wandb.summary["params/selected_total"] = int(selected_total)
