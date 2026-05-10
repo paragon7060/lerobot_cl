@@ -33,6 +33,7 @@ Notes:
 """
 
 import builtins
+import json
 from contextlib import ExitStack, nullcontext
 import logging
 import os
@@ -42,21 +43,23 @@ from typing import TypeVar
 
 import torch
 import torch.nn.functional as F
+from huggingface_hub import snapshot_download
+from huggingface_hub.errors import HFValidationError, RepositoryNotFoundError
 from huggingface_hub import hf_hub_download
 from huggingface_hub.errors import HfHubHTTPError
 from safetensors.torch import load_file as safetensors_load_file
 from torch import Tensor
 
 from lerobot.configs.types import FeatureType, PolicyFeature
-from lerobot.policies.groot_mgd.action_head.mgd_heads import (
+from lerobot.policies.groot_processed_mgd.action_head.mgd_heads import (
     ActionTargetProjector,
-    ChannelMask,
-    MGDReconstructionHead,
+    SequenceMGDHead,
+    TokenMask,
     masked_mean_pool,
     mgd_reconstruction_loss,
 )
-from lerobot.policies.groot_mgd.configuration_groot import GrootMGDConfig
-from lerobot.policies.groot_mgd.groot_n1 import GR00TN15
+from lerobot.policies.groot_processed_mgd.configuration_groot import GrootMGDConfig
+from lerobot.policies.groot_processed_mgd.groot_n1 import GR00TN15
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.utils.constants import ACTION, OBS_IMAGES
 
@@ -71,7 +74,7 @@ _SAFETENSORS_FILENAME = "model.safetensors"
 class GrootMGDPolicy(PreTrainedPolicy):
     """Wrapper around external Groot model for LeRobot integration."""
 
-    name = "groot_mgd"
+    name = "groot_processed_mgd"
     config_class = GrootMGDConfig
 
     def __init__(self, config: GrootMGDConfig, **kwargs):
@@ -89,7 +92,7 @@ class GrootMGDPolicy(PreTrainedPolicy):
         self.reset()
 
     def _init_mgd_modules(self) -> None:
-        self.channel_mask = ChannelMask(self.config.mgd_mask_ratio)
+        self.token_mask = TokenMask(self.config.mgd_token_mask_ratio)
 
         action_horizon = int(self._groot_model.action_head.action_horizon)
         action_latent_dim = int(self._groot_model.action_head.input_embedding_dim)
@@ -104,9 +107,9 @@ class GrootMGDPolicy(PreTrainedPolicy):
             pretrained_projector_path=self.config.mgd_pretrained_projector_path,
             trainable=self.config.mgd_backprop_action_target_projector,
         )
-        self.mgd_recon_head = MGDReconstructionHead(
+        self.sequence_mgd_head = SequenceMGDHead(
             in_dim=backbone_dim,
-            hidden_dim=self.config.mgd_hidden_dim,
+            hidden_dim=self.config.mgd_sequence_hidden_dim,
             out_dim=self.config.mgd_target_dim,
         )
 
@@ -149,26 +152,18 @@ class GrootMGDPolicy(PreTrainedPolicy):
         model.config.compute_dtype = model.compute_dtype
 
         if self.config.groot_pretrained_path:
-            safetensors_path = os.path.join(self.config.groot_pretrained_path, _SAFETENSORS_FILENAME)
-            if not os.path.exists(safetensors_path):
-                raise FileNotFoundError(
-                    f"groot_pretrained_path is set, but file does not exist: {safetensors_path}"
-                )
-
-            full_state = safetensors_load_file(safetensors_path)
-            groot_state = {
-                k[len(_GROOT_MODEL_PREFIX):]: v
-                for k, v in full_state.items()
-                if k.startswith(_GROOT_MODEL_PREFIX)
-            }
-            if not groot_state and any(k.startswith("backbone.") or k.startswith("action_head.") for k in full_state):
-                groot_state = full_state
-            if not groot_state:
+            pretrained_dir = self._resolve_groot_pretrained_dir()
+            state_dict = self._load_groot_state_dict(pretrained_dir)
+            first_key = next(iter(state_dict), "")
+            if not first_key.startswith(_GROOT_MODEL_PREFIX) and not any(
+                k.startswith("backbone.") or k.startswith("action_head.") for k in state_dict
+            ):
                 raise ValueError(
-                    f"No compatible keys found in {safetensors_path}. "
+                    f"No compatible keys found in {pretrained_dir}. "
                     f"Expected '{_GROOT_MODEL_PREFIX}*' or GR00T bare keys."
                 )
 
+            groot_state = self._normalize_groot_state_dict(state_dict)
             missing, unexpected = model.load_state_dict(groot_state, strict=False)
             if missing:
                 logger.warning(
@@ -190,6 +185,94 @@ class GrootMGDPolicy(PreTrainedPolicy):
 
         return model
 
+    def _resolve_groot_pretrained_dir(self) -> Path:
+        """Resolve `groot_pretrained_path` as a local dir/file or HF repo id snapshot."""
+        pretrained_path = self.config.groot_pretrained_path
+        if not pretrained_path:
+            raise ValueError("groot_pretrained_path is empty.")
+
+        candidate = Path(pretrained_path)
+        if candidate.is_file():
+            return candidate.parent
+
+        if candidate.is_dir():
+            return candidate
+
+        try:
+            downloaded = snapshot_download(
+                repo_id=pretrained_path,
+                repo_type="model",
+                allow_patterns=[
+                    "model.safetensors",
+                    "model.safetensors.index.json",
+                    "model-*.safetensors",
+                ],
+            )
+            logger.info(
+                "Downloaded groot_pretrained_path from HuggingFace repo '%s' to %s",
+                pretrained_path,
+                downloaded,
+            )
+            return Path(downloaded)
+        except (HFValidationError, RepositoryNotFoundError, HfHubHTTPError) as e:
+            raise FileNotFoundError(
+                f"groot_pretrained_path is not a local file/dir and HF download failed for repo id: {pretrained_path}"
+            ) from e
+
+    def _resolve_groot_pretrained_files(self, pretrained_dir: Path) -> list[Path]:
+        """Resolve local safetensors files for a checkpoint directory."""
+        direct_file = pretrained_dir / _SAFETENSORS_FILENAME
+        if direct_file.exists():
+            return [direct_file]
+
+        index_file = pretrained_dir / "model.safetensors.index.json"
+        if index_file.exists():
+            index_data = json.loads(index_file.read_text())
+            weight_map = index_data.get("weight_map", {})
+            shard_names = sorted(set(weight_map.values()))
+            if not shard_names:
+                raise FileNotFoundError(
+                    f"Checkpoint index exists but weight_map is empty: {index_file}"
+                )
+            shard_files = [pretrained_dir / name for name in shard_names]
+            missing = [path for path in shard_files if not path.exists()]
+            if missing:
+                raise FileNotFoundError(
+                    f"Checkpoint shards referenced by {index_file} are missing: {missing}"
+                )
+            return shard_files
+
+        shard_files = sorted(pretrained_dir.glob("*.safetensors"))
+        if shard_files:
+            return shard_files
+
+        raise FileNotFoundError(
+            f"No safetensors checkpoint found in {pretrained_dir}. "
+            "Expected model.safetensors, model.safetensors.index.json, or sharded *.safetensors files."
+        )
+
+    def _load_groot_state_dict(self, pretrained_dir: Path) -> dict[str, Tensor]:
+        """Load and merge checkpoint state dict shards."""
+        state_dict: dict[str, Tensor] = {}
+        for shard_file in self._resolve_groot_pretrained_files(pretrained_dir):
+            shard_state = safetensors_load_file(str(shard_file))
+            state_dict.update(shard_state)
+        return state_dict
+
+    @staticmethod
+    def _normalize_groot_state_dict(state_dict: dict[str, Tensor]) -> dict[str, Tensor]:
+        """Strip LeRobot prefix if present and fall back to bare GR00T keys."""
+        groot_state = {
+            k[len(_GROOT_MODEL_PREFIX):]: v
+            for k, v in state_dict.items()
+            if k.startswith(_GROOT_MODEL_PREFIX)
+        }
+        if groot_state:
+            return groot_state
+        if any(k.startswith("backbone.") or k.startswith("action_head.") for k in state_dict):
+            return state_dict
+        return {}
+
     def reset(self):
         """Reset policy state when environment resets."""
         self._action_queue = deque([], maxlen=self.config.n_action_steps)
@@ -201,7 +284,7 @@ class GrootMGDPolicy(PreTrainedPolicy):
         if mode == "head_only":
             for p in self.parameters():
                 p.requires_grad_(False)
-            for p in self.mgd_recon_head.parameters():
+            for p in self.sequence_mgd_head.parameters():
                 p.requires_grad_(True)
             return
         if mode == "lora_only":
@@ -216,7 +299,7 @@ class GrootMGDPolicy(PreTrainedPolicy):
 
             # In lora_only mode we always keep the action target path frozen.
             self.action_target_projector.requires_grad_(False)
-            for p in self.mgd_recon_head.parameters():
+            for p in self.sequence_mgd_head.parameters():
                 p.requires_grad_(True)
 
             if lora_trainable_tensors == 0:
@@ -224,6 +307,16 @@ class GrootMGDPolicy(PreTrainedPolicy):
                     "mgd_trainable_mode='lora_only' but no LoRA parameters were found. "
                     "Did you set policy.lora_rank > 0?"
                 )
+            return
+        if mode == "processed_only":
+            for p in self.parameters():
+                p.requires_grad_(False)
+
+            # Train only processed feature generation modules.
+            self._groot_model.action_head.vlln.requires_grad_(True)
+            self._groot_model.action_head.vl_self_attention.requires_grad_(True)
+            self.sequence_mgd_head.requires_grad_(True)
+            self.action_target_projector.requires_grad_(False)
             return
         if mode == "dit_only":
             # Freeze everything (LoRA weights stay frozen but still contribute to forward pass).
@@ -241,14 +334,14 @@ class GrootMGDPolicy(PreTrainedPolicy):
     def _log_mgd_setup(self) -> None:
         logger.info(
             "MGD setup: enabled=%s mode=%s target_pooling=%s target_projection=%s "
-            "target_dim=%d hidden_dim=%d mask_ratio=%.3f loss_w=%.4f fm_w=%.4f",
+            "target_dim=%d seq_hidden_dim=%d token_mask_ratio=%.3f loss_w=%.4f fm_w=%.4f",
             self.config.mgd_enabled,
             self.config.mgd_trainable_mode,
             self.config.mgd_target_pooling,
             self.config.mgd_target_projection,
             self.config.mgd_target_dim,
-            self.config.mgd_hidden_dim,
-            self.config.mgd_mask_ratio,
+            self.config.mgd_sequence_hidden_dim,
+            self.config.mgd_token_mask_ratio,
             self.config.mgd_loss_weight,
             self.config.mgd_fm_loss_weight,
         )
@@ -490,7 +583,7 @@ class GrootMGDPolicy(PreTrainedPolicy):
                 "loss": fm_loss.item(),
                 "flow_matching_loss": fm_loss.item(),
                 "mgd_loss": 0.0,
-                "mgd_mask_ratio": float(self.channel_mask.mask_ratio),
+                "mgd_token_mask_ratio_cfg": float(self.token_mask.mask_ratio),
             }
             if compute_vlm_drift:
                 with torch.no_grad():
@@ -501,11 +594,26 @@ class GrootMGDPolicy(PreTrainedPolicy):
                 loss_dict["vlm_drift_l2"] = torch.norm(z_v_current_for_logging - z_v_base, dim=-1).mean().item()
             return fm_loss, loss_dict
 
-        z_v = z_v_current
+        z_v_tokens = backbone_features.float()
         if not self.config.mgd_backprop_backbone:
-            z_v = z_v.detach()
+            z_v_tokens = z_v_tokens.detach()
 
-        z_a_hat_raw = self.mgd_recon_head(self.channel_mask(z_v))
+        if backbone_mask is None:
+            valid_token_mask = torch.ones(
+                z_v_tokens.shape[0],
+                z_v_tokens.shape[1],
+                device=z_v_tokens.device,
+                dtype=torch.bool,
+            )
+        else:
+            valid_token_mask = backbone_mask.bool()
+
+        z_v_masked_tokens, kept_token_mask, token_stats = self.token_mask(z_v_tokens, valid_token_mask)
+        z_a_hat_raw = self.sequence_mgd_head(
+            z_v_masked_tokens,
+            valid_token_mask=valid_token_mask,
+            kept_token_mask=kept_token_mask,
+        )
         z_a_hat = F.normalize(z_a_hat_raw, dim=-1)
 
         action_traj = batch["action"].to(device=device, dtype=torch.float32)
@@ -556,7 +664,10 @@ class GrootMGDPolicy(PreTrainedPolicy):
             "loss": total_loss.item(),
             "flow_matching_loss": fm_loss.item(),
             "mgd_loss": loss_mgd.item(),
-            "mgd_mask_ratio": float(self.channel_mask.mask_ratio),
+            "mgd_token_mask_ratio_cfg": float(self.token_mask.mask_ratio),
+            "valid_token_count": token_stats["valid_token_count"].mean().item(),
+            "kept_token_count": token_stats["kept_token_count"].mean().item(),
+            "actual_token_mask_ratio": token_stats["actual_token_mask_ratio"].mean().item(),
             "mgd_target_norm_raw": z_a_target_raw.norm(dim=-1).mean().item(),
             "mgd_pred_norm_raw": z_a_hat_raw.norm(dim=-1).mean().item(),
             "mgd_target_norm_post": z_a_target.norm(dim=-1).mean().item(),
@@ -567,7 +678,12 @@ class GrootMGDPolicy(PreTrainedPolicy):
         if compute_vlm_drift:
             with torch.no_grad():
                 z_v_base = self._compute_pooled_vlm_feature(groot_inputs, disable_lora=True).detach()
-            z_v_current = z_v.detach().float()
+            z_v_current = z_v_tokens.detach().float()
+            if valid_token_mask is not None:
+                mask_f = valid_token_mask.unsqueeze(-1).to(dtype=z_v_current.dtype)
+                z_v_current = (z_v_current * mask_f).sum(dim=1) / mask_f.sum(dim=1).clamp(min=1.0)
+            else:
+                z_v_current = z_v_current.mean(dim=1)
             loss_dict["vlm_drift_cos"] = F.cosine_similarity(z_v_base, z_v_current, dim=-1).mean().item()
             loss_dict["vlm_drift_l2"] = torch.norm(z_v_current - z_v_base, dim=-1).mean().item()
 

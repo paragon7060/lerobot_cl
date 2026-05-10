@@ -1,38 +1,37 @@
 #!/usr/bin/env python
-"""GROOT-MGD 학습 스크립트 (robocasa multi-dataset 호환)
+"""GROOT processed-MGD 학습 스크립트 (robocasa multi-dataset 호환)
 
 `scripts/train_groot_robocasa.py`와 동일한 구조의 standalone @parser.wrap 스크립트.
-groot 대신 groot_mgd policy로 학습하며, MGD 로깅(mgd_loss, mgd_cos_sim 등)을 포함한다.
+`groot_processed_mgd` + `processed_only` 모드 기준으로 학습하며,
+MGD 로깅(mgd_loss, mgd_cos_sim, token-mask stats 등)을 포함한다.
 
 단일 GPU 실행 예:
-  python scripts/train_groot_mgd.py \
-      --dataset.root=/home/seonho/slicing_robocasa_human_v3 \
-      --policy.type=groot_mgd \
-      --policy.groot_pretrained_path=/path/to/pretrained_model_migrated \
-      --policy.mgd_trainable_mode=lora_only \
-      --policy.mgd_mask_ratio=0.1 \
-      --policy.mgd_loss_weight=0.01 \
+  python src/lerobot/scripts/train_groot_mgd_robocasa.py \
+      --dataset.root=/home/seonho/groot_robocasa/robocasa_dataset/robocasa_human_v3 \
+      --policy.type=groot_processed_mgd \
+      --policy.groot_pretrained_path=/home/seonho/ws3/outputs/groot_inst/checkpoints/050000/pretrained_model \
+      --policy.mgd_trainable_mode=processed_only \
+      --policy.mgd_token_mask_ratio=0.1 \
+      --policy.mgd_sequence_hidden_dim=512 \
+      --policy.mgd_loss_weight=0.05 \
       --policy.mgd_backprop_backbone=true \
-      --policy.lora_rank=8 \
-      --policy.lora_alpha=16 \
-      --policy.lora_dropout=0.05 \
-      --policy.lora_target=llm \
+      --policy.lora_rank=0 \
       --policy.tune_visual=false \
       --policy.tune_llm=false \
-      --output_dir=./outputs/groot_mgd_lora_only \
+      --output_dir=./outputs/groot_processed_mgd_robocasa \
       --steps=100000 \
       --batch_size=64 \
       --log_freq=50 \
       --save_freq=20000 \
       --data_split=pretrain \
       --wandb.enable=true \
-      --wandb.project=groot_mgd \
+      --wandb.project=groot_processed_mgd \
       --wandb.entity=RwHlabs
 """
 
 import logging
 import random
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import torch
@@ -51,6 +50,9 @@ from lerobot.datasets.dataset_metadata import LeRobotDatasetMetadata
 from lerobot.datasets.factory import resolve_delta_timestamps
 from lerobot.datasets.multi_dataset import MultiLeRobotDataset
 from lerobot.policies.factory import make_policy, make_pre_post_processors
+from lerobot.policies.groot_common.batch_builder import LeRobotNativeBatchBuilder, make_robocasa_preset, tensor_report
+from lerobot.policies.groot_common.robocasa_official_runtime import discover_robocasa_official_runtime_repos
+from lerobot.policies.groot_common.robocasa_preset import apply_to_policy_config
 from lerobot.utils.train_utils import (
     get_step_checkpoint_dir,
     load_training_state,
@@ -66,48 +68,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-PRETRAIN_DIRS = [
-    "robocasa_pretrain_human_atomic",
-    "robocasa_pretrain_human_composite",
-]
-TARGET_DIRS = [
-    "robocasa_target_human_atomic",
-    "robocasa_target_human_composite",
-]
-ALL_DIRS = PRETRAIN_DIRS + TARGET_DIRS
-
-
-def get_task_repo_ids(root: Path, top_level_dirs: list[str]) -> list[str]:
-    repo_ids = []
-    for top_dir in top_level_dirs:
-        top_path = root / top_dir
-        if not top_path.exists():
-            raise FileNotFoundError(f"데이터셋 경로 없음: {top_path}")
-        tasks = sorted(
-            p.name for p in top_path.iterdir()
-            if p.is_dir() and p.name.startswith("task_")
-            and (p / "meta" / "info.json").exists()
-            and (p / "meta" / "episodes").exists()
-        )
-        skipped = sum(
-            1 for p in top_path.iterdir()
-            if p.is_dir() and p.name.startswith("task_")
-            and not ((p / "meta" / "info.json").exists() and (p / "meta" / "episodes").exists())
-        )
-        if skipped:
-            logger.warning("%s: %d개 task에 meta 없음 → 건너뜀", top_dir, skipped)
-        if not tasks:
-            raise RuntimeError(f"유효한 task 없음: {top_path}")
-        repo_ids.extend(f"{top_dir}/{t}" for t in tasks)
-    return repo_ids
-
 
 @dataclass
 class GrootMGDTrainConfig(TrainPipelineConfig):
     dataset: DatasetConfig = field(
         default_factory=lambda: DatasetConfig(
-            repo_id="",
-            root="/home/seonho/slicing_robocasa_human_v3",
+            repo_id="robocasa_human_v3",
+            root="/home/seonho/groot_robocasa/robocasa_dataset/robocasa_human_v3",
             video_backend="pyav",
         )
     )
@@ -123,16 +90,16 @@ class GrootMGDTrainConfig(TrainPipelineConfig):
 
     gradient_checkpointing: bool = False
     resume: bool = False
-    data_split: str = "all"  # "pretrain", "target", "all"
+    data_split: str = "pretrain"  # "pretrain", "target", "real"
     pretrained_path: str = ""
 
     def validate(self) -> None:
         if self.policy is None:
             raise ValueError("policy must be set")
         if not self.job_name:
-            self.job_name = "groot_mgd"
+            self.job_name = "groot_mgd_robocasa"
         if not self.output_dir:
-            self.output_dir = Path("outputs/groot_mgd")
+            self.output_dir = Path("outputs/groot_mgd_robocasa")
 
 
 @parser.wrap()
@@ -151,23 +118,37 @@ def main(cfg: GrootMGDTrainConfig) -> None:
     torch.backends.cuda.matmul.allow_tf32 = True
 
     dataset_root = Path(cfg.dataset.root)
+    preset = make_robocasa_preset(video_backend=cfg.dataset.video_backend)
+    apply_to_policy_config(cfg.policy, preset)
+    batch_builder = LeRobotNativeBatchBuilder(preset=preset)
 
-    if cfg.data_split == "pretrain":
-        top_level_dirs = PRETRAIN_DIRS
-    elif cfg.data_split == "target":
-        top_level_dirs = TARGET_DIRS
-    elif cfg.data_split == "all":
-        top_level_dirs = ALL_DIRS
-    else:
-        raise ValueError(f"Unknown data_split: {cfg.data_split!r} (pretrain / target / all)")
+    if cfg.data_split not in {"pretrain", "target", "real"}:
+        raise ValueError(f"Unknown data_split: {cfg.data_split!r} (pretrain / target / real)")
 
-    repo_ids = get_task_repo_ids(dataset_root, top_level_dirs)
+    runtime_discovery = discover_robocasa_official_runtime_repos(
+        root=dataset_root,
+        split=cfg.data_split,
+    )
+    repo_ids = runtime_discovery.repo_ids
+    if not repo_ids:
+        raise RuntimeError(
+            f"유효한 v3 task를 찾지 못함. root={dataset_root}, split={cfg.data_split}"
+        )
 
     if accelerator.is_main_process:
         cfg.output_dir.mkdir(parents=True, exist_ok=True)
         logger.info("Output dir: %s", cfg.output_dir)
         logger.info("Accelerator: num_processes=%d, device=%s", accelerator.num_processes, device)
-        logger.info("Dataset root: %s | split=%s | tasks=%d", dataset_root, cfg.data_split, len(repo_ids))
+        logger.info(
+            "Dataset root: %s | split=%s | tasks=%d (atomic=%d, composite=%d, v3=%d)",
+            dataset_root,
+            cfg.data_split,
+            len(repo_ids),
+            runtime_discovery.atomic_count,
+            runtime_discovery.composite_count,
+            runtime_discovery.v3_compatible_count,
+        )
+        logger.info("BatchSpec: %s", batch_builder.batch_spec)
 
     first_ds_meta = LeRobotDatasetMetadata(
         repo_id=repo_ids[0],
@@ -213,7 +194,6 @@ def main(cfg: GrootMGDTrainConfig) -> None:
             config={
                 "repo_ids": repo_ids,
                 "data_split": cfg.data_split,
-                "top_level_dirs": top_level_dirs,
                 "dataset_root": str(dataset_root),
                 "steps": cfg.steps,
                 "lr": cfg.policy.optimizer_lr,
@@ -235,6 +215,8 @@ def main(cfg: GrootMGDTrainConfig) -> None:
                 "mgd_target_dim": cfg.policy.mgd_target_dim,
                 "mgd_hidden_dim": cfg.policy.mgd_hidden_dim,
                 "mgd_mask_ratio": cfg.policy.mgd_mask_ratio,
+                "mgd_token_mask_ratio": cfg.policy.mgd_token_mask_ratio,
+                "mgd_sequence_hidden_dim": cfg.policy.mgd_sequence_hidden_dim,
                 "mgd_loss_weight": cfg.policy.mgd_loss_weight,
                 "mgd_fm_loss_weight": cfg.policy.mgd_fm_loss_weight,
                 "mgd_backprop_backbone": cfg.policy.mgd_backprop_backbone,
@@ -307,15 +289,16 @@ def main(cfg: GrootMGDTrainConfig) -> None:
             logger.warning("--resume=true but no checkpoint found at %s, training from scratch", last_link)
 
     if accelerator.is_main_process:
-        num_learnable_params = sum(p.numel() for p in policy.parameters() if p.requires_grad)
-        num_total_params = sum(p.numel() for p in policy.parameters())
+        raw_policy = accelerator.unwrap_model(policy)
+        named_params = list(raw_policy.named_parameters())
+
+        num_learnable_params = sum(p.numel() for _, p in named_params if p.requires_grad)
+        num_total_params = sum(p.numel() for _, p in named_params)
         logger.info("num_learnable_params=%s", f"{num_learnable_params:,}")
         logger.info("num_total_params=%s", f"{num_total_params:,}")
         logger.info("trainable ratio=%.4f%%", 100 * num_learnable_params / max(num_total_params, 1))
 
         # Group-wise trainable parameter accounting (captured before training starts).
-        named_params = list(policy.named_parameters())
-
         def _group_count(prefix: str) -> tuple[int, int]:
             total = sum(p.numel() for n, p in named_params if n.startswith(prefix))
             trainable = sum(p.numel() for n, p in named_params if n.startswith(prefix) and p.requires_grad)
@@ -394,10 +377,28 @@ def main(cfg: GrootMGDTrainConfig) -> None:
 
     policy.train()
     data_stream = infinite_dataloader()
+    parity_report_written = False
 
     for step in range(start_step + 1, cfg.steps + 1):
         raw_batch = next(data_stream)
-        batch = pre(raw_batch)
+        batch = batch_builder.build_train_batch(raw_batch, pre)
+        if accelerator.is_main_process and not parity_report_written:
+            parity_view = batch_builder.build_parity_view(batch)
+            try:
+                batch_spec_payload = asdict(batch_builder.batch_spec)
+            except Exception:
+                batch_spec_payload = dict(batch_builder.batch_spec.__dict__)
+            parity_payload = {
+                "batch_spec": batch_spec_payload,
+                "train_batch_tensor_report": tensor_report(batch),
+                "parity_view_tensor_report": tensor_report(parity_view),
+            }
+            parity_path = cfg.output_dir / "parity_report.json"
+            import json
+
+            parity_path.write_text(json.dumps(parity_payload, indent=2), encoding="utf-8")
+            logger.info("parity report 저장: %s", parity_path)
+            parity_report_written = True
         batch["compute_vlm_drift"] = step % cfg.log_freq == 0 and cfg.policy.vlm_drift_logging_enabled
 
         loss, loss_dict = policy(batch)

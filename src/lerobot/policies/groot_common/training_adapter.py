@@ -73,6 +73,57 @@ def forward_with_groot_batch(policy: Any, batch: dict[str, Tensor]) -> tuple[Ten
     return loss, {"loss": loss.detach()}
 
 
+def forward_with_mgd_custom_loss_hook(
+    policy: Any,
+    batch: dict[str, Tensor],
+    *,
+    custom_loss_weight: float = 0.0,
+) -> tuple[Tensor, dict]:
+    """MGD-safe forward wrapper with a no-op custom loss hook.
+
+    `policy(batch)` is expected to return `(base_loss, loss_dict)` where
+    `base_loss` is the already-composed training loss from the policy side.
+    For the current smoke stage, we only allow `custom_loss_weight=0.0` so
+    optimization behavior is unchanged.
+    """
+    if custom_loss_weight != 0.0:
+        raise ValueError(
+            "This smoke adapter only supports custom_loss_weight=0.0. "
+            "Non-zero custom loss is gated for later phases."
+        )
+
+    out = policy(batch)
+    if not (isinstance(out, tuple) and len(out) == 2):
+        raise TypeError(f"policy(batch) must return (loss, metrics_dict); got {type(out).__name__}")
+
+    base_loss, loss_dict = out
+    if not isinstance(base_loss, torch.Tensor):
+        raise TypeError(f"base_loss must be a Tensor; got {type(base_loss).__name__}")
+    if not torch.isfinite(base_loss):
+        raise RuntimeError(f"Non-finite base loss from policy forward: {base_loss}")
+    if not isinstance(loss_dict, dict):
+        raise TypeError(f"loss_dict must be a dict; got {type(loss_dict).__name__}")
+
+    flow_matching_loss_value = loss_dict.get("flow_matching_loss", loss_dict.get("loss"))
+    if flow_matching_loss_value is None:
+        raise KeyError("loss_dict must contain 'flow_matching_loss' or 'loss'")
+    if isinstance(flow_matching_loss_value, torch.Tensor):
+        flow_matching_loss = flow_matching_loss_value
+    else:
+        flow_matching_loss = base_loss.new_tensor(float(flow_matching_loss_value))
+
+    custom_loss = base_loss.new_zeros(())
+    total_loss = base_loss + custom_loss_weight * custom_loss
+
+    metrics = dict(loss_dict)
+    metrics["custom_loss_weight"] = float(custom_loss_weight)
+    metrics["custom_loss"] = float(custom_loss.detach().cpu().item())
+    metrics["base_loss"] = float(base_loss.detach().cpu().item())
+    metrics["total_loss"] = float(total_loss.detach().cpu().item())
+    metrics["flow_matching_loss"] = float(flow_matching_loss.detach().cpu().item())
+    return total_loss, metrics
+
+
 def unwrap_groot_model(policy_or_wrapped: Any, accelerator: "Accelerator | None" = None):
     """Return the underlying GR00TN15 model regardless of DDP / Accelerator wrap.
 

@@ -21,6 +21,7 @@ import datasets
 import numpy as np
 import pandas
 import pandas as pd
+import pyarrow as pa
 import pyarrow.dataset as pa_ds
 import pyarrow.parquet as pq
 import torch
@@ -75,10 +76,67 @@ def load_nested_dataset(
     if len(paths) == 0:
         raise FileNotFoundError(f"Provided directory does not contain any parquet file: {pq_dir}")
 
+    def _arrow_type_to_feature(dt: pa.DataType):
+        """Best-effort Arrow->HF feature conversion for metadata compatibility fallback."""
+        if pa.types.is_list(dt) or pa.types.is_large_list(dt):
+            return datasets.Sequence(_arrow_type_to_feature(dt.value_type))
+        if pa.types.is_struct(dt):
+            return {field.name: _arrow_type_to_feature(field.type) for field in dt}
+
+        # Scalar dtypes
+        if pa.types.is_boolean(dt):
+            return datasets.Value("bool")
+        if pa.types.is_int8(dt):
+            return datasets.Value("int8")
+        if pa.types.is_int16(dt):
+            return datasets.Value("int16")
+        if pa.types.is_int32(dt):
+            return datasets.Value("int32")
+        if pa.types.is_int64(dt):
+            return datasets.Value("int64")
+        if pa.types.is_uint8(dt):
+            return datasets.Value("uint8")
+        if pa.types.is_uint16(dt):
+            return datasets.Value("uint16")
+        if pa.types.is_uint32(dt):
+            return datasets.Value("uint32")
+        if pa.types.is_uint64(dt):
+            return datasets.Value("uint64")
+        if pa.types.is_float16(dt):
+            return datasets.Value("float16")
+        if pa.types.is_float32(dt):
+            return datasets.Value("float32")
+        if pa.types.is_float64(dt):
+            return datasets.Value("float64")
+        if pa.types.is_string(dt) or pa.types.is_large_string(dt):
+            return datasets.Value("string")
+        if pa.types.is_binary(dt) or pa.types.is_large_binary(dt):
+            return datasets.Value("binary")
+        if pa.types.is_timestamp(dt):
+            return datasets.Value("timestamp[us]")
+
+        # Unknown logical types fallback.
+        return datasets.Value("string")
+
+    def _infer_features_from_schema(sample_path: Path) -> datasets.Features:
+        schema = pq.read_schema(sample_path)
+        out = {}
+        for field in schema:
+            out[field.name] = _arrow_type_to_feature(field.type)
+        return datasets.Features(out)
+
     with SuppressProgressBars():
-        # We use .from_parquet() memory-mapped loading for efficiency
+        # We use .from_parquet() memory-mapped loading for efficiency.
         filters = pa_ds.field("episode_index").isin(episodes) if episodes is not None else None
-        return Dataset.from_parquet([str(path) for path in paths], filters=filters, features=features)
+        try:
+            return Dataset.from_parquet([str(path) for path in paths], filters=filters, features=features)
+        except ValueError as e:
+            # Compatibility fallback for converted datasets whose parquet metadata
+            # contains legacy/unknown HF feature tags (e.g. "_type": "List").
+            if "Feature type 'List' not found" not in str(e):
+                raise
+            inferred = features or _infer_features_from_schema(paths[0])
+            return Dataset.from_parquet([str(path) for path in paths], filters=filters, features=inferred)
 
 
 def get_parquet_num_frames(parquet_path: str | Path) -> int:

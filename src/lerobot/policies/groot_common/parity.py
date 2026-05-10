@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
@@ -214,3 +215,56 @@ def run_parity_smoke_test(
         adapter_batch=adapter_batch,
         atol=atol,
     )
+
+
+def compare_tensor_reports(
+    phase1_report: dict[str, dict[str, Any]],
+    phase2_report: dict[str, dict[str, Any]],
+    *,
+    required_keys_only: bool = False,
+    ignore_batch_dim: bool = False,
+    exclude_keys: set[str] | None = None,
+) -> dict[str, Any]:
+    """Compare tensor metadata reports (shape/dtype) from phase1/phase2 scripts."""
+    k1 = set(phase1_report.keys())
+    k2 = set(phase2_report.keys())
+
+    if required_keys_only:
+        k1 = k1 & k2
+        k2 = set(k2)
+    if exclude_keys:
+        k1 = {k for k in k1 if k not in exclude_keys}
+        k2 = {k for k in k2 if k not in exclude_keys}
+
+    common = sorted(k1 & k2)
+    missing_in_phase1 = sorted(k2 - k1)
+    extra_in_phase1 = sorted(k1 - k2)
+
+    shape_mismatch = []
+    dtype_mismatch = []
+    for key in common:
+        s1 = phase1_report[key]["shape"]
+        s2 = phase2_report[key]["shape"]
+        if ignore_batch_dim and len(s1) > 0 and len(s2) > 0:
+            s1 = s1[1:]
+            s2 = s2[1:]
+        if s1 != s2:
+            shape_mismatch.append(
+                {"key": key, "phase1": phase1_report[key]["shape"], "phase2": phase2_report[key]["shape"]}
+            )
+        if phase1_report[key]["dtype"] != phase2_report[key]["dtype"]:
+            dtype_mismatch.append(
+                {"key": key, "phase1": phase1_report[key]["dtype"], "phase2": phase2_report[key]["dtype"]}
+            )
+
+    return {
+        "common_key_count": len(common),
+        "missing_in_phase1_count": len(missing_in_phase1),
+        "extra_in_phase1_count": len(extra_in_phase1),
+        "shape_mismatch_count": len(shape_mismatch),
+        "dtype_mismatch_count": len(dtype_mismatch),
+        "missing_in_phase1": missing_in_phase1,
+        "extra_in_phase1": extra_in_phase1,
+        "shape_mismatch": shape_mismatch,
+        "dtype_mismatch": dtype_mismatch,
+    }

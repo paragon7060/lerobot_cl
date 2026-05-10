@@ -16,15 +16,17 @@
 
 from dataclasses import dataclass, field
 
-from lerobot.configs import FeatureType, NormalizationMode, PolicyFeature, PreTrainedConfig
-from lerobot.optim import AdamWConfig, CosineDecayWithWarmupSchedulerConfig
+from lerobot.configs.policies import PreTrainedConfig
+from lerobot.configs.types import FeatureType, NormalizationMode, PolicyFeature
+from lerobot.optim.optimizers import AdamWConfig
+from lerobot.optim.schedulers import CosineDecayWithWarmupSchedulerConfig
 from lerobot.utils.constants import ACTION, OBS_STATE
 
 
-@PreTrainedConfig.register_subclass("groot")
+@PreTrainedConfig.register_subclass("groot_processed_mgd")
 @dataclass
-class GrootConfig(PreTrainedConfig):
-    """Configuration for Groot policy wrapper."""
+class GrootMGDConfig(PreTrainedConfig):
+    """Configuration for Groot-MGD policy wrapper."""
 
     # Basic policy settings
     n_obs_steps: int = 1
@@ -88,6 +90,9 @@ class GrootConfig(PreTrainedConfig):
     # Whether to use the full model for LORA
     lora_full_model: bool = False
 
+    # Which component to apply LoRA to: "llm" | "vision" | "both"
+    lora_target: str = "llm"
+
     # Training parameters (matching groot_finetune_script.py)
     optimizer_lr: float = 1e-4
     optimizer_betas: tuple[float, float] = (0.95, 0.999)
@@ -116,6 +121,27 @@ class GrootConfig(PreTrainedConfig):
     report_to: str = "wandb"
     resume: bool = False
 
+    # MGD settings
+    mgd_enabled: bool = True
+    mgd_loss_weight: float = 0.05
+    mgd_fm_loss_weight: float = 1.0
+    mgd_mask_ratio: float = 0.0
+    mgd_target_dim: int = 512
+    mgd_hidden_dim: int = 512
+    mgd_sequence_hidden_dim: int = 512
+    mgd_token_mask_ratio: float = 0.1
+    mgd_target_pooling: str = "flatten"  # "flatten" | "mean"
+    mgd_target_projection: str = "frozen_random"  # "frozen_random" | "pretrained_ae"
+    mgd_pretrained_projector_path: str | None = None
+    mgd_use_cosine_loss: bool = True
+    mgd_use_mse_loss: bool = False
+    mgd_preserve_weight: float = 0.0
+    mgd_backprop_backbone: bool = True
+    mgd_backprop_action_target_projector: bool = False
+    mgd_trainable_mode: str = "processed_only"  # "default" | "head_only" | "lora_only" | "processed_only"
+    groot_pretrained_path: str | None = None
+    vlm_drift_logging_enabled: bool = True
+
     def __post_init__(self):
         super().__post_init__()
 
@@ -124,8 +150,16 @@ class GrootConfig(PreTrainedConfig):
                 f"n_action_steps ({self.n_action_steps}) cannot exceed chunk_size ({self.chunk_size})"
             )
 
-        # groot_repo_path is now optional since we ported the components
-        # No validation needed
+        if self.lora_rank > 0 and self.lora_target not in ("llm", "vision", "both"):
+            raise ValueError(
+                f"lora_target must be 'llm', 'vision', or 'both', got {self.lora_target!r}"
+            )
+
+        if self.mgd_trainable_mode not in ("default", "head_only", "lora_only", "dit_only", "processed_only"):
+            raise ValueError(
+                "mgd_trainable_mode must be 'default', 'head_only', 'lora_only', 'dit_only', or 'processed_only', "
+                f"got {self.mgd_trainable_mode!r}"
+            )
 
     def validate_features(self) -> None:
         """Validate and set up input/output features for Groot."""
@@ -198,3 +232,7 @@ class GrootConfig(PreTrainedConfig):
     def reward_delta_indices(self) -> None:
         """Return indices for delta rewards (None for Groot)."""
         return None
+
+
+# Backward-compat alias
+GrootConfig = GrootMGDConfig

@@ -32,6 +32,7 @@ from lerobot.policies.act.configuration_act import ACTConfig
 from lerobot.policies.diffusion.configuration_diffusion import DiffusionConfig
 from lerobot.policies.groot.configuration_groot import GrootConfig
 from lerobot.policies.groot_mgd.configuration_groot import GrootMGDConfig
+from lerobot.policies.groot_processed_mgd.configuration_groot import GrootMGDConfig as GrootProcessedMGDConfig
 from lerobot.policies.groot_cl.configuration_groot_cl import GrootCLConfig
 from lerobot.policies.groot_cl_v2.configuration_groot_cl_v2 import GrootCLv2Config
 from lerobot.policies.groot_robocasa.configuration_groot import GrootRobocasaConfig
@@ -131,6 +132,10 @@ def get_policy_class(name: str) -> type[PreTrainedPolicy]:
         from lerobot.policies.groot_mgd.modeling_groot import GrootMGDPolicy
 
         return GrootMGDPolicy
+    elif name == "groot_processed_mgd":
+        from lerobot.policies.groot_processed_mgd.modeling_groot import GrootMGDPolicy
+
+        return GrootMGDPolicy
     elif name == "groot_cl":
         from lerobot.policies.groot_cl.modeling_groot_cl import GrootCLPolicy
 
@@ -199,6 +204,8 @@ def make_policy_config(policy_type: str, **kwargs) -> PreTrainedConfig:
         return GrootConfig(**kwargs)
     elif policy_type == "groot_mgd":
         return GrootMGDConfig(**kwargs)
+    elif policy_type == "groot_processed_mgd":
+        return GrootProcessedMGDConfig(**kwargs)
     elif policy_type == "groot_cl":
         return GrootCLConfig(**kwargs)
     elif policy_type == "groot_cl_v2":
@@ -336,7 +343,7 @@ def make_pre_post_processors(
             }
             kwargs["preprocessor_overrides"] = preprocessor_overrides
             kwargs["postprocessor_overrides"] = postprocessor_overrides
-        elif isinstance(policy_cfg, GrootMGDConfig):
+        elif isinstance(policy_cfg, (GrootMGDConfig, GrootProcessedMGDConfig)):
             # GROOT-MGD shares the same processor normalization behavior as GROOT.
             preprocessor_overrides = {}
             postprocessor_overrides = {}
