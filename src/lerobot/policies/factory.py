@@ -35,6 +35,7 @@ from lerobot.policies.groot_mgd.configuration_groot import GrootMGDConfig
 from lerobot.policies.groot_processed_mgd.configuration_groot import GrootMGDConfig as GrootProcessedMGDConfig
 from lerobot.policies.groot_cl.configuration_groot_cl import GrootCLConfig
 from lerobot.policies.groot_cl_v2.configuration_groot_cl_v2 import GrootCLv2Config
+from lerobot.policies.groot_processed_RKD.configuration_groot_cl_v2 import GrootCLv2Config as GrootProcessedRKDConfig
 from lerobot.policies.groot_robocasa.configuration_groot import GrootRobocasaConfig
 from lerobot.policies.pi0.configuration_pi0 import PI0Config
 from lerobot.policies.pi05.configuration_pi05 import PI05Config
@@ -144,6 +145,10 @@ def get_policy_class(name: str) -> type[PreTrainedPolicy]:
         from lerobot.policies.groot_cl_v2.modeling_groot_cl_v2 import GrootCLv2Policy
 
         return GrootCLv2Policy
+    elif name == "groot_processed_rkd":
+        from lerobot.policies.groot_processed_RKD.modeling_groot_cl_v2 import GrootCLv2Policy
+
+        return GrootCLv2Policy
     elif name == "groot_robocasa":
         from lerobot.policies.groot_robocasa.modeling_groot import GrootRobocasaPolicy
 
@@ -210,6 +215,8 @@ def make_policy_config(policy_type: str, **kwargs) -> PreTrainedConfig:
         return GrootCLConfig(**kwargs)
     elif policy_type == "groot_cl_v2":
         return GrootCLv2Config(**kwargs)
+    elif policy_type == "groot_processed_rkd":
+        return GrootProcessedRKDConfig(**kwargs)
     elif policy_type == "groot_robocasa":
         return GrootRobocasaConfig(**kwargs)
     elif policy_type == "xvla":
