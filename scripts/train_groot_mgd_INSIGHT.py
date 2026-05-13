@@ -31,6 +31,7 @@ policy.type은 `groot_processed_mgd`를 사용하도록 강제한다.
 
 import logging
 import random
+from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -66,6 +67,36 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def slice_feature_dims(raw_batch: dict, action_dim: int, state_dim: int) -> dict:
+    """Slice zero-padded tail and keep only effective action/state dims."""
+    if "action" in raw_batch and action_dim is not None:
+        raw_batch["action"] = raw_batch["action"][..., :action_dim]
+    if "observation.state" in raw_batch and state_dim is not None:
+        raw_batch["observation.state"] = raw_batch["observation.state"][..., :state_dim]
+    return raw_batch
+
+
+def slice_dataset_stats(stats: dict | None, action_dim: int, state_dim: int) -> dict | None:
+    """Slice action/state stats to match effective dims."""
+    if not stats:
+        return stats
+    stats = deepcopy(stats)
+
+    def _trim(sub: dict, dim: int) -> dict:
+        return {
+            k: v[..., :dim].contiguous()
+            if isinstance(v, torch.Tensor) and v.ndim >= 1 and v.shape[-1] > dim
+            else v
+            for k, v in sub.items()
+        }
+
+    if "action" in stats and action_dim is not None:
+        stats["action"] = _trim(stats["action"], action_dim)
+    if "observation.state" in stats and state_dim is not None:
+        stats["observation.state"] = _trim(stats["observation.state"], state_dim)
+    return stats
+
+
 @dataclass
 class GrootMGDTrainConfig(TrainPipelineConfig):
     dataset: DatasetConfig = field(
@@ -88,6 +119,8 @@ class GrootMGDTrainConfig(TrainPipelineConfig):
     gradient_checkpointing: bool = False
     resume: bool = False
     pretrained_path: str = ""
+    action_dim: int = 8
+    state_dim: int = 16
 
     def validate(self) -> None:
         if self.policy is None:
@@ -166,13 +199,20 @@ def main(cfg: GrootMGDTrainConfig) -> None:
                 "vlm_drift_logging_enabled": cfg.policy.vlm_drift_logging_enabled,
                 "gradient_checkpointing": cfg.gradient_checkpointing,
                 "seed": cfg.seed,
+                "action_dim": cfg.action_dim,
+                "state_dim": cfg.state_dim,
             },
             save_code=False,
         )
         logger.info("WandB initialized: project=%s, run=%s", cfg.wandb.project, wandb.run.name)
 
     ds_meta = LeRobotDatasetMetadata(repo_id=cfg.dataset.repo_id, root=cfg.dataset.root)
+    if "action" in ds_meta.features:
+        ds_meta.features["action"]["shape"] = (cfg.action_dim,)
+    if "observation.state" in ds_meta.features:
+        ds_meta.features["observation.state"]["shape"] = (cfg.state_dim,)
     delta_timestamps = resolve_delta_timestamps(cfg.policy, ds_meta)
+    sliced_stats = slice_dataset_stats(ds_meta.stats, cfg.action_dim, cfg.state_dim)
 
     if accelerator.is_main_process:
         dataset = LeRobotDataset(
@@ -203,7 +243,7 @@ def main(cfg: GrootMGDTrainConfig) -> None:
         prefetch_factor=2 if cfg.num_workers > 0 else None,
     )
 
-    pre, post = make_pre_post_processors(cfg.policy, dataset_stats=dataset.stats)
+    pre, post = make_pre_post_processors(cfg.policy, dataset_stats=sliced_stats)
     policy = make_policy(cfg.policy, ds_meta=ds_meta)
 
     if cfg.pretrained_path:
@@ -289,6 +329,19 @@ def main(cfg: GrootMGDTrainConfig) -> None:
 
     for step in range(start_step + 1, cfg.steps + 1):
         raw_batch = next(data_stream)
+        raw_batch = slice_feature_dims(raw_batch, cfg.action_dim, cfg.state_dim)
+        if accelerator.is_main_process and step == start_step + 1:
+            action_shape = tuple(raw_batch["action"].shape) if "action" in raw_batch else None
+            state_shape = (
+                tuple(raw_batch["observation.state"].shape)
+                if "observation.state" in raw_batch
+                else None
+            )
+            logger.info(
+                "First sliced batch shapes: action=%s, observation.state=%s",
+                action_shape,
+                state_shape,
+            )
         batch = pre(raw_batch)
         batch["compute_vlm_drift"] = step % cfg.log_freq == 0 and cfg.policy.vlm_drift_logging_enabled
 
