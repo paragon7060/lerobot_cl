@@ -1,43 +1,32 @@
-#!/usr/bin/env python
-"""GR00T Multi-Dataset 학습 스크립트
+#!/usr/bin/env python3
+"""GROOT processed-MGD 학습 스크립트 (INSIGHT 단일 데이터셋 전용).
 
-로컬 경로의 4개 그룹 (각 그룹은 task_XXXX 서브디렉토리로 쪼개진 LeRobot 데이터셋)을
-MultiLeRobotDataset으로 합쳐서 학습한다.
+`Whalswp/INSIGHTfixposV3_EE_quat` 데이터셋 학습을 기본으로 하며,
+policy.type은 `groot_processed_mgd`를 사용하도록 강제한다.
 
-데이터셋 경로 구조:
-  {dataset_root}/
-    robocasa_pretrain_human_atomic/task_0001/{meta,data,videos}
-    robocasa_pretrain_human_atomic/task_0002/...
-    robocasa_pretrain_human_composite/task_0001/...
-    robocasa_target_human_atomic/task_0001/...
-    robocasa_target_human_composite/task_0001/...
-
-단일 GPU 실행:
-  python scripts/train_groot_multi.py \
-      --dataset.root=/home/seonho/slicing_robocasa_human_v3 \
-      --policy.type=groot \
-      --output_dir=./outputs/groot_multi \
-      --job_name=groot_multi_v1 \
-      --steps=100000 \
-      --batch_size=128 \
+단일 GPU 실행 예:
+  python scripts/train_groot_mgd_INSIGHT.py \
+      --dataset.repo_id=Whalswp/INSIGHTfixposV3_EE_quat \
+      --dataset.root=/home/seonho/workspace/data/Whalswp/INSIGHTfixposV3_EE_quat \
+      --dataset.video_backend=pyav \
+      --policy.type=groot_processed_mgd \
+      --policy.groot_pretrained_path=/home/seonho/ws3/outputs/groot_inst/checkpoints/050000/pretrained_model \
+      --policy.mgd_trainable_mode=processed_only \
+      --policy.mgd_token_mask_ratio=0.1 \
+      --policy.mgd_sequence_hidden_dim=512 \
+      --policy.mgd_loss_weight=0.05 \
+      --policy.mgd_backprop_backbone=true \
+      --policy.lora_rank=0 \
       --policy.tune_visual=false \
       --policy.tune_llm=false \
+      --output_dir=./outputs/groot_processed_mgd_insight \
+      --steps=100000 \
+      --batch_size=64 \
+      --log_freq=50 \
+      --save_freq=20000 \
       --wandb.enable=true \
-      --wandb.project=groot_robocasa \
+      --wandb.project=groot_processed_mgd \
       --wandb.entity=RwHlabs
-
-Multi-GPU 실행 (예: 2 GPU, effective BS = 64x2 = 128):
-  CUDA_VISIBLE_DEVICES=0,1 accelerate launch \\
-      --num_processes=2 \\
-      scripts/train_groot_multi.py \\
-      --dataset.root=/home/seonho/slicing_robocasa_human_v3 \\
-      --policy.type=groot \\
-      --output_dir=./outputs/groot_multi \\
-      --batch_size=64 \\
-      --steps=100000 \\
-      --policy.tune_visual=false \\
-      --policy.tune_llm=false \\
-      --wandb.enable=true
 """
 
 import logging
@@ -59,7 +48,7 @@ from lerobot.configs.policies import PreTrainedConfig
 from lerobot.configs.train import TrainPipelineConfig
 from lerobot.datasets.dataset_metadata import LeRobotDatasetMetadata
 from lerobot.datasets.factory import resolve_delta_timestamps
-from lerobot.datasets.multi_dataset import MultiLeRobotDataset
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.policies.factory import make_policy, make_pre_post_processors
 from lerobot.utils.train_utils import (
     get_step_checkpoint_dir,
@@ -76,59 +65,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-PRETRAIN_DIRS = [
-    "robocasa_pretrain_human_atomic",
-    "robocasa_pretrain_human_composite",
-]
-TARGET_DIRS = [
-    "robocasa_target_human_atomic",
-    "robocasa_target_human_composite",
-]
-ALL_DIRS = PRETRAIN_DIRS + TARGET_DIRS
-
-
-def get_task_repo_ids(root: Path, top_level_dirs: list[str]) -> list[str]:
-    """root 아래 각 top-level dir의 task_XXXX 서브디렉토리를 열거한다.
-    반환값: ["robocasa_pretrain_human_atomic/task_0001", ...] 형식
-    MultiLeRobotDataset은 root / repo_id 경로로 로드하므로 이 형식이 맞다.
-    """
-    repo_ids = []
-    for top_dir in top_level_dirs:
-        top_path = root / top_dir
-        if not top_path.exists():
-            raise FileNotFoundError(f"데이터셋 경로 없음: {top_path}")
-        tasks = sorted(
-            p.name for p in top_path.iterdir()
-            if p.is_dir() and p.name.startswith("task_")
-            and (p / "meta" / "info.json").exists()
-            and (p / "meta" / "episodes").exists()
-        )
-        skipped = sum(
-            1 for p in top_path.iterdir()
-            if p.is_dir() and p.name.startswith("task_")
-            and not ((p / "meta" / "info.json").exists() and (p / "meta" / "episodes").exists())
-        )
-        if skipped:
-            logger.warning("%s: %d개 task에 meta 없음 → 건너뜀", top_dir, skipped)
-        if not tasks:
-            raise RuntimeError(f"유효한 task 없음: {top_path}")
-        repo_ids.extend(f"{top_dir}/{t}" for t in tasks)
-    return repo_ids
-
 
 @dataclass
-class GrootMultiTrainConfig(TrainPipelineConfig):
+class GrootMGDTrainConfig(TrainPipelineConfig):
     dataset: DatasetConfig = field(
         default_factory=lambda: DatasetConfig(
-            repo_id="",  # 사용 안 함 (multi-dataset이므로)
-            root="/home/seonho/slicing_robocasa_human_v3",
+            repo_id="Whalswp/INSIGHTfixposV3_EE_quat",
+            root=None,
             video_backend="pyav",
         )
     )
     policy: PreTrainedConfig | None = None
 
     steps: int = 100_000
-    batch_size: int = 128
+    batch_size: int = 64
     num_workers: int = 8
     log_freq: int = 100
     save_freq: int = 10_000
@@ -137,20 +87,25 @@ class GrootMultiTrainConfig(TrainPipelineConfig):
 
     gradient_checkpointing: bool = False
     resume: bool = False
-    data_split: str = "all"  # "pretrain", "target", "all"
-    pretrained_path: str = ""  # pretrain 체크포인트 경로 (weights만 로드, optimizer는 새로)
+    pretrained_path: str = ""
 
     def validate(self) -> None:
         if self.policy is None:
             raise ValueError("policy must be set")
         if not self.job_name:
-            self.job_name = "groot_multi"
+            self.job_name = "groot_mgd_insight"
         if not self.output_dir:
-            self.output_dir = Path("outputs/groot_multi")
+            self.output_dir = Path("outputs/groot_mgd_insight")
 
 
 @parser.wrap()
-def main(cfg: GrootMultiTrainConfig) -> None:
+def main(cfg: GrootMGDTrainConfig) -> None:
+    if cfg.policy.type != "groot_processed_mgd":
+        raise ValueError(
+            "train_groot_mgd_INSIGHT.py는 policy.type=groot_processed_mgd 전용입니다. "
+            f"현재 값: {cfg.policy.type!r}"
+        )
+
     ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
     accelerator = Accelerator(
         mixed_precision="no",
@@ -161,66 +116,13 @@ def main(cfg: GrootMultiTrainConfig) -> None:
 
     random.seed(cfg.seed)
     torch.manual_seed(cfg.seed)
-
     torch.backends.cudnn.benchmark = True
     torch.backends.cuda.matmul.allow_tf32 = True
-
-    dataset_root = Path(cfg.dataset.root)
-
-    # data_split에 따라 사용할 디렉토리 선택
-    if cfg.data_split == "pretrain":
-        top_level_dirs = PRETRAIN_DIRS
-    elif cfg.data_split == "target":
-        top_level_dirs = TARGET_DIRS
-    elif cfg.data_split == "all":
-        top_level_dirs = ALL_DIRS
-    else:
-        raise ValueError(f"Unknown data_split: {cfg.data_split!r} (pretrain / target / all)")
-
-    # task_XXXX 서브디렉토리 열거 (모든 프로세스에서 동일하게 실행)
-    repo_ids = get_task_repo_ids(dataset_root, top_level_dirs)
 
     if accelerator.is_main_process:
         cfg.output_dir.mkdir(parents=True, exist_ok=True)
         logger.info("Output dir: %s", cfg.output_dir)
         logger.info("Accelerator: num_processes=%d, device=%s", accelerator.num_processes, device)
-        logger.info("Dataset root: %s", dataset_root)
-        logger.info("총 task 수: %d", len(repo_ids))
-
-    # delta_timestamps는 첫 번째 task 기준으로 계산 (fps/feature 구조 동일하다고 가정)
-    first_ds_meta = LeRobotDatasetMetadata(
-        repo_id=repo_ids[0],
-        root=dataset_root / repo_ids[0],
-    )
-    delta_timestamps = resolve_delta_timestamps(cfg.policy, first_ds_meta)
-
-    # MultiLeRobotDataset: root/repo_id 경로로 각 task를 로드
-    # accelerate 환경에서 main process 먼저 로드 후 나머지 동기화
-    if accelerator.is_main_process:
-        dataset = MultiLeRobotDataset(
-            repo_ids=repo_ids,
-            root=dataset_root,
-            delta_timestamps=delta_timestamps,
-            video_backend=cfg.dataset.video_backend,
-        )
-    accelerator.wait_for_everyone()
-    if not accelerator.is_main_process:
-        dataset = MultiLeRobotDataset(
-            repo_ids=repo_ids,
-            root=dataset_root,
-            delta_timestamps=delta_timestamps,
-            video_backend=cfg.dataset.video_backend,
-        )
-
-    if accelerator.is_main_process:
-        logger.info(
-            "MultiLeRobotDataset: %d frames, %d episodes across %d tasks",
-            dataset.num_frames,
-            dataset.num_episodes,
-            len(repo_ids),
-        )
-        if dataset.disabled_features:
-            logger.warning("비활성화된 features (task 간 불일치): %s", dataset.disabled_features)
 
     use_wandb = cfg.wandb.enable and accelerator.is_main_process
     if use_wandb:
@@ -234,10 +136,8 @@ def main(cfg: GrootMultiTrainConfig) -> None:
             resume="allow" if cfg.resume else None,
             dir=str(cfg.output_dir),
             config={
-                "repo_ids": repo_ids,
-                "data_split": cfg.data_split,
-                "top_level_dirs": top_level_dirs,
-                "dataset_root": str(dataset_root),
+                "repo_id": cfg.dataset.repo_id,
+                "dataset_root": str(cfg.dataset.root) if cfg.dataset.root is not None else None,
                 "steps": cfg.steps,
                 "lr": cfg.policy.optimizer_lr,
                 "batch_size": cfg.batch_size,
@@ -248,14 +148,50 @@ def main(cfg: GrootMultiTrainConfig) -> None:
                 "tune_projector": cfg.policy.tune_projector,
                 "tune_diffusion_model": cfg.policy.tune_diffusion_model,
                 "lora_rank": cfg.policy.lora_rank,
+                "lora_alpha": cfg.policy.lora_alpha,
+                "lora_dropout": cfg.policy.lora_dropout,
+                "lora_target": cfg.policy.lora_target,
+                "mgd_enabled": cfg.policy.mgd_enabled,
+                "mgd_trainable_mode": cfg.policy.mgd_trainable_mode,
+                "mgd_target_pooling": cfg.policy.mgd_target_pooling,
+                "mgd_target_projection": cfg.policy.mgd_target_projection,
+                "mgd_target_dim": cfg.policy.mgd_target_dim,
+                "mgd_hidden_dim": cfg.policy.mgd_hidden_dim,
+                "mgd_mask_ratio": cfg.policy.mgd_mask_ratio,
+                "mgd_token_mask_ratio": cfg.policy.mgd_token_mask_ratio,
+                "mgd_sequence_hidden_dim": cfg.policy.mgd_sequence_hidden_dim,
+                "mgd_loss_weight": cfg.policy.mgd_loss_weight,
+                "mgd_fm_loss_weight": cfg.policy.mgd_fm_loss_weight,
+                "mgd_backprop_backbone": cfg.policy.mgd_backprop_backbone,
+                "vlm_drift_logging_enabled": cfg.policy.vlm_drift_logging_enabled,
                 "gradient_checkpointing": cfg.gradient_checkpointing,
                 "seed": cfg.seed,
-                "total_frames": dataset.num_frames,
-                "total_episodes": dataset.num_episodes,
             },
             save_code=False,
         )
         logger.info("WandB initialized: project=%s, run=%s", cfg.wandb.project, wandb.run.name)
+
+    ds_meta = LeRobotDatasetMetadata(repo_id=cfg.dataset.repo_id, root=cfg.dataset.root)
+    delta_timestamps = resolve_delta_timestamps(cfg.policy, ds_meta)
+
+    if accelerator.is_main_process:
+        dataset = LeRobotDataset(
+            repo_id=cfg.dataset.repo_id,
+            root=cfg.dataset.root,
+            delta_timestamps=delta_timestamps,
+            video_backend=cfg.dataset.video_backend,
+        )
+    accelerator.wait_for_everyone()
+    if not accelerator.is_main_process:
+        dataset = LeRobotDataset(
+            repo_id=cfg.dataset.repo_id,
+            root=cfg.dataset.root,
+            delta_timestamps=delta_timestamps,
+            video_backend=cfg.dataset.video_backend,
+        )
+
+    if accelerator.is_main_process:
+        logger.info("Dataset: %d frames, %d episodes", dataset.num_frames, dataset.num_episodes)
 
     dataloader = DataLoader(
         dataset,
@@ -267,18 +203,14 @@ def main(cfg: GrootMultiTrainConfig) -> None:
         prefetch_factor=2 if cfg.num_workers > 0 else None,
     )
 
-    # stats는 MultiLeRobotDataset의 aggregated stats 사용
     pre, post = make_pre_post_processors(cfg.policy, dataset_stats=dataset.stats)
+    policy = make_policy(cfg.policy, ds_meta=ds_meta)
 
-    # make_policy에는 첫 번째 task ds_meta 전달 (feature shape 추론용)
-    policy = make_policy(cfg.policy, ds_meta=first_ds_meta)
-
-    # ── pretrained weights 로드 (optimizer/scheduler는 새로 생성) ──────
     if cfg.pretrained_path:
         from safetensors.torch import load_model as safetensors_load_model
+
         ckpt_model = Path(cfg.pretrained_path) / "model.safetensors"
         if not ckpt_model.exists():
-            # pretrained_model 하위 폴더 자동 탐색
             ckpt_model = Path(cfg.pretrained_path) / "pretrained_model" / "model.safetensors"
         safetensors_load_model(policy, str(ckpt_model))
         logger.info("Loaded pretrained weights from %s", ckpt_model)
@@ -306,21 +238,17 @@ def main(cfg: GrootMultiTrainConfig) -> None:
     accelerator.wait_for_everyone()
     policy, optimizer, dataloader, scheduler = accelerator.prepare(policy, optimizer, dataloader, scheduler)
 
-    # ── Resume from checkpoint ────────────────────────────────────────────
     start_step = 0
     if cfg.resume:
         last_link = Path(cfg.output_dir) / "checkpoints" / LAST_CHECKPOINT_LINK
         if last_link.exists():
             resume_dir = last_link.resolve()
             logger.info("Resuming from checkpoint: %s", resume_dir)
-            # Load model weights
             from safetensors.torch import load_model as safetensors_load_model
+
             model_path = resume_dir / "pretrained_model" / "model.safetensors"
             safetensors_load_model(accelerator.unwrap_model(policy), str(model_path))
-            # Load optimizer, scheduler, rng state
-            start_step, optimizer, scheduler = load_training_state(
-                resume_dir, optimizer, scheduler
-            )
+            start_step, optimizer, scheduler = load_training_state(resume_dir, optimizer, scheduler)
             logger.info("Resumed at step %d", start_step)
         else:
             logger.warning("--resume=true but no checkpoint found at %s, training from scratch", last_link)
@@ -330,7 +258,11 @@ def main(cfg: GrootMultiTrainConfig) -> None:
         num_total_params = sum(p.numel() for p in policy.parameters())
         logger.info("num_learnable_params=%s", f"{num_learnable_params:,}")
         logger.info("num_total_params=%s", f"{num_total_params:,}")
-        logger.info("trainable ratio=%.2f%%", 100 * num_learnable_params / max(num_total_params, 1))
+        logger.info("trainable ratio=%.4f%%", 100 * num_learnable_params / max(num_total_params, 1))
+
+        if use_wandb:
+            wandb.summary["params/whole_total"] = int(num_total_params)
+            wandb.summary["params/whole_trainable"] = int(num_learnable_params)
 
     def infinite_dataloader():
         while True:
@@ -358,6 +290,7 @@ def main(cfg: GrootMultiTrainConfig) -> None:
     for step in range(start_step + 1, cfg.steps + 1):
         raw_batch = next(data_stream)
         batch = pre(raw_batch)
+        batch["compute_vlm_drift"] = step % cfg.log_freq == 0 and cfg.policy.vlm_drift_logging_enabled
 
         loss, loss_dict = policy(batch)
 
@@ -372,23 +305,42 @@ def main(cfg: GrootMultiTrainConfig) -> None:
             log_str = " | ".join(f"{k}={v:.4f}" for k, v in loss_dict.items())
             logger.info(
                 "step=%d/%d | lr=%.2e | grad_norm=%.3f | %s",
-                step, cfg.steps, lr_now,
+                step,
+                cfg.steps,
+                lr_now,
                 grad_norm.item() if isinstance(grad_norm, torch.Tensor) else grad_norm,
                 log_str,
             )
 
             if use_wandb:
-                wandb.log(
-                    {
-                        "train/loss": loss_dict.get("loss", loss.item()),
-                        "train/flow_matching_loss": loss_dict.get("flow_matching_loss", loss_dict.get("loss", loss.item())),
-                        "train/lr": lr_now,
-                        "train/grad_norm": (
-                            grad_norm.item() if isinstance(grad_norm, torch.Tensor) else float(grad_norm)
-                        ),
-                    },
-                    step=step,
-                )
+                wandb_log = {
+                    "train/loss": loss_dict.get("loss", loss.item()),
+                    "train/flow_matching_loss": loss_dict.get(
+                        "flow_matching_loss", loss_dict.get("loss", loss.item())
+                    ),
+                    "train/lr": lr_now,
+                    "train/grad_norm": (
+                        grad_norm.item() if isinstance(grad_norm, torch.Tensor) else float(grad_norm)
+                    ),
+                }
+                for k in (
+                    "mgd_loss",
+                    "mgd_cos_sim",
+                    "mgd_mask_ratio",
+                    "mgd_token_mask_ratio_cfg",
+                    "mgd_target_norm_raw",
+                    "mgd_pred_norm_raw",
+                    "mgd_target_norm_post",
+                    "mgd_pred_norm_post",
+                    "valid_token_count",
+                    "kept_token_count",
+                    "actual_token_mask_ratio",
+                    "vlm_drift_cos",
+                    "vlm_drift_l2",
+                ):
+                    if k in loss_dict:
+                        wandb_log[f"train/{k}"] = loss_dict[k]
+                wandb.log(wandb_log, step=step)
 
         if step % cfg.save_freq == 0:
             accelerator.wait_for_everyone()
