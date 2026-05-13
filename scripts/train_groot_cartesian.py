@@ -140,8 +140,8 @@ class GrootCartesianTrainConfig(TrainPipelineConfig):
     use_policy_training_preset: bool = False
     gradient_checkpointing: bool = False
 
-    # 변환된 데이터셋: action 32→7 (pos3+aa3+gripper), state 32→16 (ee7+joint7+gripper2)
-    action_dim: int = 7
+    # 변환된 데이터셋: action 32→7 (pos3+quat4+gripper), state 32→16 (ee7+joint7+gripper2)
+    action_dim: int = 8
     state_dim: int = 16
 
     # task description 모드: "guide" | "non_guide" | "raw"
