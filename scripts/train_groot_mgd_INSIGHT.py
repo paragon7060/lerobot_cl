@@ -34,7 +34,9 @@ import random
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
+import json
 
+import pandas as pd
 import torch
 import wandb
 from accelerate import Accelerator
@@ -65,6 +67,20 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+_SCRIPT_DIR = Path(__file__).parent
+_KEYFRAME_PKG_DIR = _SCRIPT_DIR.parent / "src/lerobot/policies/groot_keyframe"
+TASK_DESCRIPTIONS_PATHS: dict[str, Path] = {
+    "guide": _KEYFRAME_PKG_DIR / "task_descriptions.json",
+    "non_guide": _KEYFRAME_PKG_DIR / "task_descriptions_non_guide.json",
+}
+
+
+def build_task_desc_map(task_descriptions_path: Path, dataset_root: Path) -> dict[str, str]:
+    with open(task_descriptions_path) as f:
+        name_to_desc: dict[str, str] = json.load(f)
+    tasks_df = pd.read_parquet(dataset_root / "meta" / "tasks.parquet").reset_index()
+    return {row["index"]: name_to_desc.get(row["index"], row["index"]) for _, row in tasks_df.iterrows()}
 
 
 def slice_feature_dims(raw_batch: dict, action_dim: int, state_dim: int) -> dict:
@@ -121,6 +137,8 @@ class GrootMGDTrainConfig(TrainPipelineConfig):
     pretrained_path: str = ""
     action_dim: int = 8
     state_dim: int = 16
+    task_prompt_mode: str = "non_guide"
+    task_descriptions_path: str | None = None
 
     def validate(self) -> None:
         if self.policy is None:
@@ -129,6 +147,11 @@ class GrootMGDTrainConfig(TrainPipelineConfig):
             self.job_name = "groot_mgd_insight"
         if not self.output_dir:
             self.output_dir = Path("outputs/groot_mgd_insight")
+        valid_modes = list(TASK_DESCRIPTIONS_PATHS) + ["raw"]
+        if self.task_prompt_mode not in valid_modes:
+            raise ValueError(
+                f"task_prompt_mode must be one of {valid_modes}, got {self.task_prompt_mode!r}"
+            )
 
 
 @parser.wrap()
@@ -201,6 +224,7 @@ def main(cfg: GrootMGDTrainConfig) -> None:
                 "seed": cfg.seed,
                 "action_dim": cfg.action_dim,
                 "state_dim": cfg.state_dim,
+                "task_prompt_mode": cfg.task_prompt_mode,
             },
             save_code=False,
         )
@@ -213,6 +237,25 @@ def main(cfg: GrootMGDTrainConfig) -> None:
         ds_meta.features["observation.state"]["shape"] = (cfg.state_dim,)
     delta_timestamps = resolve_delta_timestamps(cfg.policy, ds_meta)
     sliced_stats = slice_dataset_stats(ds_meta.stats, cfg.action_dim, cfg.state_dim)
+
+    if cfg.task_prompt_mode == "raw":
+        task_name_to_desc = None
+        if accelerator.is_main_process:
+            logger.info("Task prompt mode: raw")
+    else:
+        desc_path = (
+            Path(cfg.task_descriptions_path)
+            if cfg.task_descriptions_path
+            else TASK_DESCRIPTIONS_PATHS[cfg.task_prompt_mode]
+        )
+        task_name_to_desc = build_task_desc_map(desc_path, ds_meta.root)
+        if accelerator.is_main_process:
+            logger.info(
+                "Task description mapping loaded: mode=%s, path=%s, tasks=%d",
+                cfg.task_prompt_mode,
+                desc_path,
+                len(task_name_to_desc),
+            )
 
     if accelerator.is_main_process:
         dataset = LeRobotDataset(
@@ -330,6 +373,8 @@ def main(cfg: GrootMGDTrainConfig) -> None:
     for step in range(start_step + 1, cfg.steps + 1):
         raw_batch = next(data_stream)
         raw_batch = slice_feature_dims(raw_batch, cfg.action_dim, cfg.state_dim)
+        if task_name_to_desc is not None and "task" in raw_batch:
+            raw_batch["task"] = [task_name_to_desc.get(t, t) for t in raw_batch["task"]]
         if accelerator.is_main_process and step == start_step + 1:
             action_shape = tuple(raw_batch["action"].shape) if "action" in raw_batch else None
             state_shape = (

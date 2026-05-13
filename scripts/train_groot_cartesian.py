@@ -145,7 +145,7 @@ class GrootCartesianTrainConfig(TrainPipelineConfig):
     state_dim: int = 16
 
     # task description 모드: "guide" | "non_guide" | "raw"
-    task_prompt_mode: str = "guide"
+    task_prompt_mode: str = "non_guide"
     task_descriptions_path: str | None = None  # None이면 task_prompt_mode로 자동 선택
 
     def validate(self) -> None:
