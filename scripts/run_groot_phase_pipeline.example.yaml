@@ -1,0 +1,55 @@
+common_args:
+  - --num_workers=2
+  - --batch_size=64
+  - --log_freq=100
+  - --wandb.enable=true
+  - --wandb.entity=RwHlabs
+
+stage_defaults:
+  python_bin: python
+  save_freq: 30000
+
+stages:
+  - name: phase2_rkd
+    script: clvla/lerobot_cl/src/lerobot/scripts/train_groot_processed_rkd.py
+    cuda_visible_devices: "0"
+    mode_arg: policy.cl_v2_trainable_mode
+    mode: processed_only
+    steps: 120000
+    output_dir: /home/seonho/groot_robocasa/processed_rkd_ckpt/phase2
+    log_path: /home/seonho/groot_robocasa/processed_rkd_ckpt/phase2/train.log
+    pretrained_arg: policy.groot_pretrained_path
+    pretrained_value: paragon7060/Robocasa_baseline
+    extra_args:
+      - --dataset.root=/home/seonho/groot_robocasa/robocasa_dataset/robocasa_v3_official_presliced
+      - --data_split=pretrain
+      - --policy.type=groot_processed_rkd
+      - --policy.cl_v2_phase=phase2
+      - --policy.cl_v2_student_repr=flatten
+      - --policy.cl_v2_action_repr=raw_flatten
+      - --policy.cl_v2_loss_weight=0.2
+      - --policy.cl_v2_fm_loss_weight=0.01
+      - --policy.lora_rank=0
+      - --policy.tune_visual=false
+      - --policy.tune_llm=false
+      - --wandb.project=groot_processed_rkd_phase2
+
+  - name: phase3_mgd
+    script: clvla/lerobot_cl/src/lerobot/scripts/train_groot_mgd_robocasa.py
+    cuda_visible_devices: "1"
+    mode_arg: policy.mgd_trainable_mode
+    mode: dit_core_only
+    steps: 120000
+    output_dir: /home/seonho/groot_robocasa/processed_rkd_ckpt/phase3
+    log_path: /home/seonho/groot_robocasa/processed_rkd_ckpt/phase3/train.log
+    pretrained_from_prev: true
+    pretrained_arg: pretrained_path
+    extra_args:
+      - --dataset.root=/home/seonho/groot_robocasa/robocasa_dataset/robocasa_human_v3
+      - --data_split=pretrain
+      - --policy.type=groot_processed_mgd
+      - --policy.mgd_backprop_backbone=true
+      - --policy.lora_rank=0
+      - --policy.tune_visual=false
+      - --policy.tune_llm=false
+      - --wandb.project=groot_processed_mgd_phase3

@@ -1,0 +1,56 @@
+execution:
+  # launcher is split with shlex and executed with shell=False.
+  # Do not use "CUDA_VISIBLE_DEVICES=1 python" here. Select GPU outside:
+  # CUDA_VISIBLE_DEVICES=1 python src/lerobot/scripts/train_groot_official_equiv.py --recipe_yaml ...
+  # If it must be encoded here, use: "env CUDA_VISIBLE_DEVICES=1 python"
+  # "accelerate launch" is also supported.
+  launcher: python
+  pipeline_mode: both
+  dry_print_commands: false
+
+run:
+  run_name: robocasa_mgd_mask05_w02
+  wandb_auto_name: true
+  wandb_project_prefix: groot_processed
+  wandb_group: robocasa_mgd_mask05_w02
+  wandb_tags:
+    - robocasa
+    - mgd
+    - presliced_100demo
+
+common:
+  dataset.root: /home/seonho/groot_robocasa/robocasa_dataset/robocasa_v3_official_presliced
+  data_split: pretrain
+  num_workers: 2
+  steps: 120000
+  batch_size: 64
+  log_freq: 100
+  save_freq: 30000
+  # Presliced 100-demo native training intentionally uses shuffle for now.
+  # sampler_mode: official_equiv is a future TODO and currently raises NotImplementedError.
+  sampler_mode: shuffle
+  wandb.enable: true
+  wandb.entity: RwHlabs
+
+phase2:
+  output_dir: /home/seonho/groot_robocasa/processed_mgd_ckpt/phase2
+  args:
+    policy.type: groot_processed_mgd
+    policy.groot_pretrained_path: paragon7060/Robocasa_baseline
+    policy.mgd_trainable_mode: processed_only
+    policy.mgd_token_mask_ratio: 0.5
+    policy.mgd_sequence_hidden_dim: 512
+    policy.mgd_loss_weight: 0.2
+    policy.mgd_backprop_backbone: true
+    policy.lora_rank: 0
+    policy.tune_visual: false
+    policy.tune_llm: false
+
+phase3:
+  output_dir: /home/seonho/groot_robocasa/processed_mgd_ckpt/phase3
+  args:
+    policy.type: groot_processed_mgd
+    policy.mgd_trainable_mode: dit_core_only
+    policy.lora_rank: 0
+    policy.tune_visual: false
+    policy.tune_llm: false
