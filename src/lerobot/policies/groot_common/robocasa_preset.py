@@ -93,8 +93,11 @@ def apply_to_policy_config(cfg: "GrootConfig", preset: RobocasaPreset) -> None:
     Only fields the preset is authoritative for are overwritten; experiment-
     specific fields (e.g. contrastive loss weights on `GrootCLConfig`, MGD knobs
     on `GrootMGDConfig`) are left untouched.
+
+    Model checkpoint paths are intentionally not overwritten here. They must
+    come from YAML/CLI or the policy's own default fallback so that
+    `base_model_path` / `groot_pretrained_path` obey user intent.
     """
-    cfg.base_model_path = preset.base_model_path
     cfg.embodiment_tag = preset.embodiment_tag
     cfg.chunk_size = preset.chunk_size
     cfg.n_action_steps = preset.n_action_steps

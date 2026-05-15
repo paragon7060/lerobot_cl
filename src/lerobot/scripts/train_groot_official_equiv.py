@@ -8,7 +8,9 @@ official-equivalent roots through MultiLeRobotDataset and LeRobotNativeBatchBuil
 
 import json
 import logging
+import os
 import random
+import re
 import shlex
 import subprocess
 import sys
@@ -77,6 +79,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+UNRESOLVED_ENV_VAR_RE = re.compile(r"\$\{[^}]+\}|\$[A-Za-z_][A-Za-z0-9_]*")
 
 
 @dataclass
@@ -439,6 +442,43 @@ def unique_preserve_order(items: list[str]) -> list[str]:
     return result
 
 
+def expand_yaml_string(value: str) -> str:
+    expanded = os.path.expanduser(os.path.expandvars(value))
+    if UNRESOLVED_ENV_VAR_RE.search(expanded):
+        raise RuntimeError(f"Unresolved environment variable in YAML value: {value}")
+    return expanded
+
+
+def expand_yaml_values(value: Any) -> Any:
+    if isinstance(value, str):
+        return expand_yaml_string(value)
+    if isinstance(value, dict):
+        return {key: expand_yaml_values(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [expand_yaml_values(item) for item in value]
+    return value
+
+
+def apply_config_path_expansions(cfg: GrootOfficialEquivTrainConfig) -> None:
+    if cfg.dataset.root is not None:
+        cfg.dataset.root = expand_yaml_string(str(cfg.dataset.root))
+    if cfg.pretrained_path:
+        cfg.pretrained_path = expand_yaml_string(str(cfg.pretrained_path))
+    if cfg.recipe_yaml:
+        cfg.recipe_yaml = expand_yaml_string(str(cfg.recipe_yaml))
+    if cfg.pipeline_yaml:
+        cfg.pipeline_yaml = expand_yaml_string(str(cfg.pipeline_yaml))
+    if cfg.phase2_output_dir:
+        cfg.phase2_output_dir = expand_yaml_string(str(cfg.phase2_output_dir))
+    if cfg.phase3_output_dir:
+        cfg.phase3_output_dir = expand_yaml_string(str(cfg.phase3_output_dir))
+    if cfg.policy is not None:
+        for attr in ("groot_pretrained_path", "base_model_path"):
+            value = safe_getattr(cfg.policy, attr)
+            if isinstance(value, str) and ("$" in value or "~" in value):
+                setattr(cfg.policy, attr, expand_yaml_string(value))
+
+
 def load_pipeline_yaml(path: str | Path) -> dict[str, Any]:
     try:
         import yaml
@@ -451,7 +491,7 @@ def load_pipeline_yaml(path: str | Path) -> dict[str, Any]:
         return {}
     if not isinstance(payload, dict):
         raise TypeError(f"Pipeline YAML must contain a mapping at top level: {yaml_path}")
-    return payload
+    return expand_yaml_values(payload)
 
 
 def flatten_args(mapping: dict[str, Any] | None, prefix: str = "") -> dict[str, Any]:
@@ -1108,6 +1148,7 @@ def save_training_checkpoint(
 
 @parser.wrap()
 def main(cfg: GrootOfficialEquivTrainConfig) -> None:
+    apply_config_path_expansions(cfg)
     recipe_path = cfg.recipe_yaml or cfg.pipeline_yaml
     if recipe_path:
         run_pipeline_from_yaml(cfg)
