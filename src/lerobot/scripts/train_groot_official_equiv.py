@@ -14,6 +14,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1332,8 +1333,20 @@ def main(cfg: GrootOfficialEquivTrainConfig) -> None:
     parity_report_path = cfg.output_dir / "parity_report.json" if cfg.write_parity_report else None
 
     for step in range(start_step + 1, cfg.steps + 1):
+        t0 = time.perf_counter()
         raw_batch = next(data_stream)
+        t1 = time.perf_counter()
+        if accelerator.is_main_process and step <= 5:
+            logger.info("timing checkpoint step=%d | data_next_done=%.3fs", step, t1 - t0)
         batch = batch_builder.build_train_batch(raw_batch, pre)
+        t2 = time.perf_counter()
+        if accelerator.is_main_process and step <= 5:
+            logger.info(
+                "timing checkpoint step=%d | preproc_done=%.3fs | data_plus_preproc=%.3fs",
+                step,
+                t2 - t1,
+                t2 - t0,
+            )
 
         if accelerator.is_main_process and not first_batch_report_written:
             first_batch_report_path, parity_report_path = write_first_batch_reports(cfg, batch_builder, batch)
@@ -1347,6 +1360,14 @@ def main(cfg: GrootOfficialEquivTrainConfig) -> None:
         )
 
         outputs = policy(batch)
+        t3 = time.perf_counter()
+        if accelerator.is_main_process and step <= 5:
+            logger.info(
+                "timing checkpoint step=%d | forward_done=%.3fs | data_plus_preproc_plus_forward=%.3fs",
+                step,
+                t3 - t2,
+                t3 - t0,
+            )
         loss, loss_dict = normalize_policy_output(outputs)
         if not isinstance(loss, torch.Tensor):
             raise TypeError(f"policy(batch) must return a Tensor loss, got {type(loss).__name__}")
@@ -1358,12 +1379,29 @@ def main(cfg: GrootOfficialEquivTrainConfig) -> None:
         optimizer.step()
         scheduler.step()
         optimizer.zero_grad(set_to_none=True)
+        t4 = time.perf_counter()
+
+        log_timing = accelerator.is_main_process and (step <= 5 or step % cfg.log_freq == 0)
+        if log_timing:
+            logger.info(
+                "timing step=%d | data_next=%.3fs | preproc=%.3fs | forward=%.3fs | backward_opt=%.3fs | total=%.3fs",
+                step,
+                t1 - t0,
+                t2 - t1,
+                t3 - t2,
+                t4 - t3,
+                t4 - t0,
+            )
 
         if accelerator.is_main_process and step % cfg.log_freq == 0:
             lr_now = scheduler.get_last_lr()[0]
             loss_scalars = scalar_loss_dict(loss_dict)
             loss_scalars.setdefault("loss", float(loss.detach().float().cpu().item()))
             grad_norm_scalar = scalar_to_float(grad_norm)
+            data_s = t2 - t0
+            update_s = t4 - t2
+            total_step_s = t4 - t0
+            step_s = total_step_s
             log_str = " | ".join(f"{key}={value:.4f}" for key, value in sorted(loss_scalars.items()))
             logger.info(
                 "step=%d/%d | lr=%.2e | grad_norm=%.3f | %s",
@@ -1383,6 +1421,10 @@ def main(cfg: GrootOfficialEquivTrainConfig) -> None:
                     ),
                     "train/lr": lr_now,
                     "train/grad_norm": grad_norm_scalar,
+                    "train/step_s": step_s,
+                    "train/data_s": data_s,
+                    "train/update_s": update_s,
+                    "train/total_step_s": total_step_s,
                 }
                 for key, value in loss_scalars.items():
                     wandb_log[f"train/{key}"] = value
